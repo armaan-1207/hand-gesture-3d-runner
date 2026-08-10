@@ -1,128 +1,125 @@
-# 🏃‍♂️ Cyber Runner 3D — Hand-Gesture Controlled Endless Runner
+# Cyber Runner 3D
 
-A high-performance, futuristic 3D endless runner game powered by **Three.js**, **MediaPipe Hands**, and **OpenCV / WebGL**. Play using standard keyboard controls or control your character hands-free in real-time using webcam gesture tracking!
-
----
-
-## 🌟 Key Features
-
-- **🎮 Dual Control Modes**:
-  - **Keyboard Controls**: Responsive `A`/`D` (or Left/Right arrows) for lane changes, `W` / Up Arrow for jumping, and `S` / Down Arrow for sliding.
-  - **Vision-Based Hand Tracking**: Hands-free gameplay using real-time webcam video processing via MediaPipe Hands & OpenCV principles.
-- **🛡️ Crowd Robustness & Primary Player Isolation**:
-  - Automatically identifies and locks onto the **primary player's hand** using bounding box volume, center distance, and temporal confidence tracking.
-  - Ignores background people, ambient movements, and secondary hands in crowded environments.
-- **⚡ Zero-Jitter Landmark Smoothing**:
-  - Integrated 3D **One-Euro Filter** signal processing to eliminate camera jitter and noise without introduced latency.
-- **🚀 High-Performance Object-Pool Engine**:
-  - Zero mid-frame garbage collection (GC) spikes via track chunk object-pooling.
-  - Pre-rendered 840m horizon lookahead with smooth environment recycling.
-  - Static shadow-mapping and optimized WebGL draw calls for steady 60 FPS gameplay.
-- **💥 Dynamic Obstacles & Collectibles**:
-  - **Hurdles**: Low obstacles requiring a **Jump**.
-  - **Overhang Beams**: High obstacles requiring a **Slide / Crouch**.
-  - **Full Blockades**: Wide barriers requiring a **Lane Change**.
-  - **Gold Energy Coins**: Collectible coins with persistent high score tracking (`localStorage`).
-- **🤖 Animated 3D Character**:
-  - Rigged XBot GLTF model with dynamic animation blending (Running, Jumping, Sliding).
+Cyber Runner 3D is a high-performance, web-based 3D endless runner game built with **Three.js**, **MediaPipe Hands**, and **WebGL**. The application supports standard keyboard controls as well as real-time, gesture-based hand tracking using computer vision directly in the browser.
 
 ---
 
-## 🕹️ Controls Guide
+## Key Features
 
-### 🖐️ Hand Gesture Controls
+### Vision Engine & Primary Player Isolation
+- **Crowd Robustness**: Dynamically isolates and tracks the primary player's hand while filtering out secondary hands, background movement, and ambient noise in crowded environments.
+- **One-Euro Landmark Filtering**: Integrates a 3D One-Euro low-pass filter to smooth 21 hand landmarks, eliminating jitter while maintaining responsive control.
+- **Real-Time Gesture Recognition**: Evaluates hand bounding volume, vertical velocity vectors, and normalized spatial coordinates for seamless steering, jumping, and sliding actions.
 
-| Gesture | Action | Description |
+### 3D Rendering & Engine Performance
+- **Object-Pool Track Management**: Utilizes an object-pool architecture for track chunk recycling, eliminating runtime garbage collection (GC) pauses and frame drops.
+- **Optimized WebGL Pipeline**: Incorporates static shadow mapping, fixed draw-call budgeting, and frustum culling to sustain 60 FPS performance across desktop devices.
+- **Rigged 3D Character**: Features a GLTF XBot character model integrated with state-blended skeletal animations (Run, Jump, Slide).
+
+### Gameplay Mechanics
+- **Dynamic Obstacles**:
+  - **Hurdles**: Require jumping.
+  - **Overhang Beams**: Require sliding/crouching.
+  - **Blockades**: Require lane switching.
+- **Collectibles & Persistence**: Spawns collectible energy coins and persists all-time high scores locally.
+- **Hand-Controlled Restart**: Allows players to restart runs directly via hand tracking without requiring keyboard or mouse input.
+
+---
+
+## Controls
+
+### Hand Tracking Gestures
+
+| Action | Control Gesture | Description |
 | :--- | :--- | :--- |
-| **Move Hand Left / Right** | `Steer / Change Lane` | Translate your hand across the camera frame to shift lanes. |
-| **Raise Hand High / Swipe Up** | `Jump` | Raise your hand into the upper 22% of the webcam frame or execute a quick upward swipe to jump over hurdles. |
-| **Drop Hand Low / Swipe Down** | `Slide / Crouch` | Lower your hand into the bottom 20% of the frame or execute a quick downward swipe to slide under overhang beams. |
-| **Hand Controlled Restart** | `Restart Run` | Click **Hand Controlled Restart** on the Game Over modal to restart directly using vision tracking. |
+| **Steer / Move Lane** | Horizontal Hand Shift | Shift hand left or right relative to the camera viewport center. |
+| **Jump** | Hand Raise / Upward Swipe | Position hand in upper 22% of frame or execute an upward swipe vector. |
+| **Slide / Crouch** | Hand Drop / Downward Swipe | Position hand in lower 20% of frame or execute a downward swipe vector. |
+| **Restart Run** | Hand Controlled Restart | Select restart option on the Game Over overlay using vision tracking. |
 
-### ⌨️ Keyboard Controls
+### Keyboard Shortcuts
 
-- **Left Arrow / `A`**: Move Left
-- **Right Arrow / `D`**: Move Right
-- **Up Arrow / `W`**: Jump
-- **Down Arrow / `S`**: Slide / Crouch
-- **Space**: Start / Restart Game
-
----
-
-## 🛠️ Tech Stack & Architecture
-
-- **Frontend Engine**: HTML5, Vanilla CSS3 (Matrix Dark Emerald Theme), JavaScript (ES Modules)
-- **3D Graphics & Rendering**: [Three.js](https://threejs.org/) (WebGL, GLTFLoader, GSAP Animations)
-- **Computer Vision**: [@mediapipe/hands](https://github.com/google/mediapipe) (3D Hand Landmark Detection)
-- **Signal Processing**: Custom **One-Euro Filter** implementation (`OneEuroFilter.js`) for signal smoothing
-- **Bundler & Dev Server**: [Vite](https://vitejs.dev/)
+| Key | Function |
+| :--- | :--- |
+| `A` / `Left Arrow` | Move Left |
+| `D` / `Right Arrow` | Move Right |
+| `W` / `Up Arrow` | Jump |
+| `S` / `Down Arrow` | Slide / Crouch |
+| `Space` | Start / Restart Game |
 
 ---
 
-## 📁 Repository Structure
+## Technology Stack
+
+- **Graphics & Animation**: Three.js (WebGL), GSAP (Tweens & Timelines)
+- **Computer Vision**: @mediapipe/hands, OpenCV pre-processing principles
+- **Signal Processing**: Custom 3D One-Euro Low-Pass Filter (`OneEuroFilter.js`)
+- **Build System & Tooling**: Vite, ES Modules
+
+---
+
+## Project Structure
 
 ```
-├── index.html                 # Main application HTML layout & overlays
-├── package.json               # Dependencies & scripts
+├── index.html                 # DOM structure and UI modal overlays
+├── package.json               # Package configuration and dependencies
 ├── public/
 │   └── models/
-│       └── Xbot.glb           # 3D Animated Character Model
+│       └── Xbot.glb           # Rigged 3D character asset
 └── src/
-    ├── main.js                # Core game loop, Three.js setup, scene management
+    ├── main.js                # Game loop, scene initialization, state machine
     ├── components/
-    │   ├── ObstacleManager.js # Obstacle/Coin spawning & AABB collision detection
-    │   └── TrackManager.js    # Object-pool chunk-based infinite track generator
+    │   ├── ObstacleManager.js # Spawning logic and AABB collision detection
+    │   └── TrackManager.js    # Object-pooled track chunk manager
     ├── services/
-    │   └── HandTracker.js     # MediaPipe vision processing & gesture classification
+    │   └── HandTracker.js     # MediaPipe pipeline and gesture classification
     ├── utils/
-    │   └── OneEuroFilter.js   # Adaptive low-pass filter for landmark smoothing
-    └── style.css              # Cyberpunk / Matrix visual styling & overlays
+    │   └── OneEuroFilter.js   # Adaptive signal smoothing algorithm
+    └── style.css              # User interface styling and Matrix theme
 ```
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v16 or higher)
-- Web Browser with WebGL and Webcam support (Chrome, Edge, Brave, Firefox, Safari)
+- Node.js (v16.0.0 or higher)
+- WebGL-compatible browser with webcam permission support
 
-### Installation
+### Installation & Local Development
 
-1. **Clone the repository**:
+1. Clone the repository:
    ```bash
    git clone https://github.com/paramnarayan/hand-gesture-3d-runner.git
    cd hand-gesture-3d-runner
    ```
 
-2. **Install dependencies**:
+2. Install dependencies:
    ```bash
    npm install
    ```
 
-3. **Start the local development server**:
+3. Launch dev server:
    ```bash
    npm run dev
    ```
 
-4. **Open in browser**:
-   Navigate to `http://localhost:3000` (or the URL provided in your terminal).
+4. Access application:
+   Open browser at `http://localhost:3000`.
 
----
+### Production Build
 
-## ⚙️ Building for Production
-
-To generate a minified, production-ready build:
+To assemble optimized static assets:
 
 ```bash
 npm run build
 ```
 
-The output will be generated inside the `dist/` directory.
+Production output will be compiled into the `dist/` directory.
 
 ---
 
-## 📄 License
+## License
 
-This project is open-source and available under the [MIT License](LICENSE).
+Distributed under the [MIT License](LICENSE).
