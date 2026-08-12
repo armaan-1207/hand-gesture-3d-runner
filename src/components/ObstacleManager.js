@@ -114,19 +114,17 @@ export class ObstacleManager {
       const obstacleType = Math.floor(Math.random() * 3);
       const blockedLanes = new Set();
 
-      if (obstacleType === 0) {
-        const lane = Math.floor(Math.random() * 3);
-        blockedLanes.add(lane);
-        this.spawnHurdle(chunkGroup, lanes[lane], relZ);
-      } else if (obstacleType === 1) {
-        const lane = Math.floor(Math.random() * 3);
-        blockedLanes.add(lane);
-        this.spawnOverhang(chunkGroup, lanes[lane], relZ);
-      } else {
-        const openLane = Math.floor(Math.random() * 3);
-        for (let l = 0; l < 3; l++) {
-          if (l !== openLane) {
-            blockedLanes.add(l);
+      // All obstacle types now spawn in exactly 2 lanes, leaving 1 safe lane.
+      // This gives the player the choice to either Jump/Slide OR dodge into the safe lane!
+      const openLane = Math.floor(Math.random() * 3);
+      for (let l = 0; l < 3; l++) {
+        if (l !== openLane) {
+          blockedLanes.add(l);
+          if (obstacleType === 0) {
+            this.spawnHurdle(chunkGroup, lanes[l], relZ);
+          } else if (obstacleType === 1) {
+            this.spawnOverhang(chunkGroup, lanes[l], relZ);
+          } else {
             this.spawnBlockade(chunkGroup, lanes[l], relZ);
           }
         }

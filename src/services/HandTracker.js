@@ -26,7 +26,7 @@ export class HandTracker {
     this.lastHandPos = null;
     this.lastHandTime = 0;
     this.lastActionTime = 0;
-    this.actionCooldownMs = 200; // 400ms cooldown to prevent over-sensitive double swipes
+    this.actionCooldownMs = 350; // Reduced from 600ms to allow faster double-swipes, but long enough for return stroke absorption
 
     // FPS Throttling for zero WebGL lag
     this.lastFrameSendTime = 0;
@@ -37,6 +37,7 @@ export class HandTracker {
     this.onTrackingStateChange = options.onTrackingStateChange || null;
     this.onMoveLeft = options.onMoveLeft || null;
     this.onMoveRight = options.onMoveRight || null;
+    this.onSetLane = options.onSetLane || null;
     this.onJump = options.onJump || null;
     this.onSlide = options.onSlide || null;
     this.onRestart = options.onRestart || null;
@@ -317,52 +318,57 @@ export class HandTracker {
     const handY = hand.centroid.y;
 
     if (this.isGameOver) {
-      if (this.onRestart) {
-        this.onRestart();
-        this.lastActionTime = now + 900;
-      }
       return;
     }
 
-    if (this.lastHandPos) {
-      const dt = (now - this.lastHandTime) / 1000.0;
-      if (dt > 0) {
-        const vx = (handX - this.lastHandPos.x) / dt;
-        const vy = (handY - this.lastHandPos.y) / dt;
-
-        // 1. Jump Gesture: Intentional rapid upward swipe (vy < -0.7) OR hand raised high in upper 22% frame (handY < 0.22)
-        if (vy < -0.7 || (handY < 0.22 && wrist.y < 0.26)) {
-          if (this.onJump) {
-            this.onJump();
-            this.lastActionTime = now;
-          }
-        }
-        // 2. Slide Gesture: Intentional rapid downward swipe (vy > +0.7) OR hand dropped low in bottom 20% frame (handY > 0.80)
-        else if (vy > 0.7 || handY > 0.80) {
-          if (this.onSlide) {
-            this.onSlide();
-            this.lastActionTime = now;
-          }
-        }
-        // 3. Move Left Gesture: Intentional left region (handX < 0.26) OR deliberate left swipe (vx < -0.7)
-        else if (handX < 0.26 || vx < -0.7) {
-          if (this.onMoveLeft) {
-            this.onMoveLeft();
-            this.lastActionTime = now;
-          }
-        }
-        // 4. Move Right Gesture: Intentional right region (handX > 0.74) OR deliberate right swipe (vx > +0.7)
-        else if (handX > 0.74 || vx > 0.7) {
-          if (this.onMoveRight) {
-            this.onMoveRight();
-            this.lastActionTime = now;
-          }
-        }
-      }
+    if (!this.anchorPos) {
+      this.anchorPos = { x: handX, y: handY };
+      this.lastActionTime = now;
+      return;
     }
 
-    this.lastHandPos = { x: handX, y: handY };
-    this.lastHandTime = now;
+    if (now - this.lastActionTime < this.actionCooldownMs) {
+      // During cooldown, force the anchor to follow the hand immediately.
+      // This completely absorbs the "return to center" stroke!
+      this.anchorPos = { x: handX, y: handY };
+      return;
+    }
+
+    const dy = handY - this.anchorPos.y;
+
+    // Must move 18% of the screen relative to the anchor to trigger jump/slide
+    const SWIPE_THRESHOLD_Y = 0.18;
+
+    let yGestureTriggered = false;
+
+    if (dy < -SWIPE_THRESHOLD_Y) {
+      if (this.onJump) this.onJump();
+      yGestureTriggered = true;
+    } 
+    else if (dy > SWIPE_THRESHOLD_Y) {
+      if (this.onSlide) this.onSlide();
+      yGestureTriggered = true;
+    } 
+
+    if (yGestureTriggered) {
+      // Snap anchor to current position and start cooldown
+      this.anchorPos = { x: handX, y: handY };
+      this.lastActionTime = now;
+    } else {
+      // Slow drift for Y anchor
+      this.anchorPos.y += (handY - this.anchorPos.y) * 0.08;
+    }
+
+    // Absolutely NO glitching on X Axis: The hand's position IS the character's lane!
+    if (this.onSetLane) {
+      if (handX < 0.35) {
+        this.onSetLane(0); // Left Third of screen -> Left Lane
+      } else if (handX > 0.65) {
+        this.onSetLane(2); // Right Third of screen -> Right Lane
+      } else {
+        this.onSetLane(1); // Center of screen -> Center Lane
+      }
+    }
   }
 
   drawSkeleton(ctx, landmarks, width, height) {

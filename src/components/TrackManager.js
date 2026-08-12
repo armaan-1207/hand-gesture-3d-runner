@@ -38,9 +38,9 @@ export class TrackManager {
     }
 
     // Position all chunks sequentially starting from nextChunkZ
-    // First 3 chunks are safe (~90m runway = ~3.5 seconds at start speed), rest have obstacles
+    // First 2 chunks are safe (~6s in AI mode, ~2.7s in Keyboard mode), rest have obstacles
     for (let i = 0; i < this._pool.length; i++) {
-      const isFirst = (i < 3);
+      const isFirst = (i < 2);
       this._placeChunk(this._pool[i], isFirst);
     }
 
@@ -284,9 +284,9 @@ export class TrackManager {
     this.nextChunkZ = 20;
     this._head = 0;
 
-    // Re-place all pool chunks from scratch — first 3 are safe
+    // Re-place all pool chunks from scratch — first 2 are safe
     for (let i = 0; i < this._pool.length; i++) {
-      this._placeChunk(this._pool[i], i < 3);
+      this._placeChunk(this._pool[i], i < 2);
     }
   }
 }

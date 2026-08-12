@@ -33,6 +33,7 @@ class CyberRunnerGame {
     this.distance = 0;
     this.coins = 0;
     this.speed = CONFIG.INITIAL_SPEED;
+    this.currentAcceleration = CONFIG.ACCELERATION;
     this.highScore = parseInt(localStorage.getItem('cyberrunner_highscore') || '0', 10);
 
     // Movement & Lane State
@@ -188,11 +189,8 @@ class CyberRunnerGame {
           else this.webcamPip.classList.add('hidden');
         }
       },
-      onMoveLeft: () => {
-        if (this.gameState === 'PLAYING') this.moveLane(-1);
-      },
-      onMoveRight: () => {
-        if (this.gameState === 'PLAYING') this.moveLane(1);
+      onSetLane: (targetLane) => {
+        if (this.gameState === 'PLAYING') this.setLane(targetLane);
       },
       onJump: () => {
         if (this.gameState === 'PLAYING') this.jump();
@@ -430,19 +428,30 @@ class CyberRunnerGame {
 
   moveLane(direction) {
     const targetLane = THREE.MathUtils.clamp(this.currentLane + direction, 0, 2);
+    this.setLane(targetLane);
+  }
+
+  setLane(targetLane) {
     if (targetLane === this.currentLane) return;
 
+    // Determine direction for character leaning
+    const direction = targetLane > this.currentLane ? 1 : -1;
     this.currentLane = targetLane;
     const targetX = CONFIG.LANES[this.currentLane];
 
     if (this.laneTween) this.laneTween.kill();
 
+    // Tilt character dynamically during move (exaggerated for smoothness)
+    this.playerGroup.rotation.z = direction * -0.25; 
+
+    // Bouncy, spring-like easing instead of a rigid snap
     this.laneTween = gsap.to(this.playerGroup.position, {
       x: targetX,
-      duration: 0.2,
-      ease: 'power2.out',
+      duration: 0.35, 
+      ease: 'back.out(1.2)', 
       onComplete: () => {
-        this.playerGroup.rotation.set(0, 0, 0);
+        // Softly settle the rotation back to 0
+        gsap.to(this.playerGroup.rotation, { z: 0, duration: 0.2, ease: 'sine.inOut' });
       }
     });
   }
@@ -575,12 +584,24 @@ class CyberRunnerGame {
     }
   }
 
+  applySpeedSettings() {
+    // Slower pacing for AI hand controls to allow player to adapt
+    if (this.handTracker && this.handTracker.isTracking) {
+      this.speed = 18; // Increased from 13 so it matches the running animation and doesn't look like moonwalking
+      this.currentAcceleration = 0.18; 
+    } else {
+      this.speed = CONFIG.INITIAL_SPEED;
+      this.currentAcceleration = CONFIG.ACCELERATION;
+    }
+  }
+
   startGame() {
     if (this.handTracker) this.handTracker.isGameOver = false;
     this.startZ = this.playerGroup.position.z;
     this.distance = 0;
     this.playerGroup.rotation.set(0, 0, 0);
     this.startScreen.classList.add('hidden');
+    this.applySpeedSettings();
     this.playCinematicIntro();
   }
 
@@ -592,7 +613,9 @@ class CyberRunnerGame {
     this.hud.classList.remove('hidden');
     this.distance = 0;
     this.coins = 0;
-    this.speed = CONFIG.INITIAL_SPEED;
+
+    this.applySpeedSettings();
+    
     this.currentLane = 1;
     this.isJumping = false;
     this.isSliding = false;
@@ -612,8 +635,11 @@ class CyberRunnerGame {
     if (this.obstacleManager) this.obstacleManager.reset();
     if (this.trackManager) this.trackManager.reset();
 
+    // Properly cross-fade from Idle to Run when restarting
     if (this.actions && this.actions.run) {
-      this.actions.run.reset().play();
+      if (this.currentAction) this.currentAction.fadeOut(0.2);
+      this.actions.run.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+      this.currentAction = this.actions.run;
     }
 
     this.clock.start();
@@ -785,7 +811,9 @@ class CyberRunnerGame {
     const delta = Math.min(this.clock.getDelta(), 0.1);
 
     if (this.mixer) {
-      this.mixer.update(delta * (this.speed / CONFIG.INITIAL_SPEED));
+      // Clamp animation speed to 0.8x minimum so it never looks like slow-motion lag
+      const animMultiplier = Math.max(0.8, this.speed / CONFIG.INITIAL_SPEED);
+      this.mixer.update(delta * animMultiplier);
     }
 
     // Matrix rain falls at all times except the menu
@@ -800,7 +828,7 @@ class CyberRunnerGame {
 
       // 1. Forward continuous acceleration
       if (this.speed < CONFIG.MAX_SPEED) {
-        this.speed += CONFIG.ACCELERATION * delta;
+        this.speed += this.currentAcceleration * delta;
       }
 
       // 2. Player forward motion along Z
@@ -844,10 +872,14 @@ class CyberRunnerGame {
 
       const dampingX = 1 - Math.exp(-12 * delta);
       const dampingY = 1 - Math.exp(-8 * delta);
+      const dampingZ = 1 - Math.exp(-15 * delta); // New Z-damping for buttery smooth forward motion
 
       this.camera.position.x += (targetX - this.camera.position.x) * dampingX;
       this.camera.position.y += (targetY - this.camera.position.y) * dampingY;
-      this.camera.position.z = targetZ;
+      
+      // Smoothly interpolate Z to absorb any delta-time micro-stutters
+      if (!this.camera.position.z) this.camera.position.z = targetZ;
+      this.camera.position.z += (targetZ - this.camera.position.z) * dampingZ;
 
       // Reuse scratch vector — avoids per-frame heap allocation
       this._lookAtTarget.set(
