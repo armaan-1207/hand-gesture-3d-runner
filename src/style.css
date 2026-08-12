@@ -102,6 +102,12 @@ html, body {
   gap: 8px;
 }
 
+.coins-card {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 .coins-card .hud-value {
   color: var(--gold-accent);
   text-shadow: 0 0 14px rgba(255, 215, 0, 0.6);
@@ -110,6 +116,15 @@ html, body {
 .speed-card .hud-value {
   color: var(--neon-green);
   text-shadow: 0 0 14px rgba(0, 255, 102, 0.6);
+}
+
+/* OWASP Logo inside HUD */
+#owasp-logo {
+  position: absolute;
+  right: -10px;
+  top: -10px;
+  height: 32px;
+  width: auto;
 }
 
 /* Webcam PiP Container */
@@ -383,6 +398,45 @@ html, body {
   box-shadow: 0 0 20px rgba(0, 255, 102, 0.3);
 }
 
+.hud-layer {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  pointer-events: none;
+  display: flex;
+  justify-content: space-between;
+  padding: 30px 40px;
+}
+
+.hud-panel {
+  background: rgba(2, 26, 9, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(0, 255, 102, 0.3);
+  border-radius: 12px;
+  padding: 12px 24px;
+  box-shadow: 0 8px 32px rgba(0, 255, 102, 0.15), inset 0 0 15px rgba(0, 255, 102, 0.05);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.hud-label {
+  font-size: 0.7rem;
+  letter-spacing: 3px;
+  color: #a3e635;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.hud-value {
+  font-size: 2.2rem;
+  font-weight: 800;
+  color: #fff;
+  text-shadow: 0 0 10px rgba(0, 255, 102, 0.6);
+}
+
 /* Game Over Stats */
 .stats-grid {
   width: 100%;
@@ -429,4 +483,100 @@ html, body {
 .highlight-gold {
   color: var(--gold-accent);
   text-shadow: 0 0 14px rgba(255, 215, 0, 0.6);
+}
+
+/* Game Logo — sizing only, no appearance changes */
+.game-logo-img {
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+/* Restart button glow pulse (was referenced in HTML but missing in CSS) */
+.glow-btn {
+  animation: glowPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 8px 24px rgba(0, 255, 102, 0.4); }
+  50%       { box-shadow: 0 8px 44px rgba(0, 255, 102, 0.85); }
+}
+
+/* ── Cinematic Intro Overlay ─────────────────────────────────────── */
+.cinematic-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: cinFadeIn 0.35s ease forwards;
+}
+
+.cinematic-overlay.hidden {
+  display: none !important;
+}
+
+@keyframes cinFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.cin-text-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  text-align: center;
+  padding: 0 24px;
+}
+
+.cin-line {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  letter-spacing: 6px;
+  text-transform: uppercase;
+  color: var(--neon-green);
+  opacity: 0;
+  margin: 0;
+}
+
+.cin-line-1 {
+  font-size: clamp(14px, 2vw, 18px);
+  text-shadow: 0 0 20px rgba(0, 255, 102, 0.8);
+  animation: cinAppear 0.7s ease 0.3s forwards;
+}
+
+.cin-line-2 {
+  font-size: clamp(22px, 3.5vw, 30px);
+  text-shadow: 0 0 30px rgba(0, 255, 102, 0.9), 0 0 60px rgba(0, 255, 102, 0.4);
+  animation: cinAppear 0.7s ease 0.75s forwards;
+}
+
+.cin-line-3 {
+  font-size: clamp(52px, 8vw, 80px);
+  text-shadow: 0 0 40px rgba(0, 255, 102, 1), 0 0 80px rgba(0, 255, 102, 0.6);
+  animation: cinAppear 0.5s ease 1.1s forwards, cinPulse 0.9s ease 1.6s infinite;
+}
+
+@keyframes cinAppear {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.94);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes cinPulse {
+  0%, 100% { text-shadow: 0 0 40px rgba(0,255,102,1), 0 0 80px rgba(0,255,102,0.6); }
+  50%       { text-shadow: 0 0 70px rgba(0,255,102,1), 0 0 130px rgba(0,255,102,0.9); }
 }

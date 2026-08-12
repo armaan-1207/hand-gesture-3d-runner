@@ -10,50 +10,87 @@ export class ObstacleManager {
 
     // Reusable Geometries & Materials
     this.initSharedResources();
+
+    // Scratch vectors/boxes reused every frame in checkCollisions() —
+    // avoids allocating a new Vector3 per obstacle/coin per frame (GC churn -> stutter)
+    this._playerWorldPos = new THREE.Vector3();
+    this._obstacleWorldPos = new THREE.Vector3();
+    this._coinWorldPos = new THREE.Vector3();
+    this._playerBoxMin = new THREE.Vector3();
+    this._playerBoxMax = new THREE.Vector3();
+    this._playerBox = new THREE.Box3(this._playerBoxMin, this._playerBoxMax);
+    this._obsBox = new THREE.Box3();
+    
+    this.time = 0;
   }
 
   initSharedResources() {
-    // 1. Low Hurdle (Require Jump) - High Contrast Crimson Red
-    this.hurdleGeo = new THREE.BoxGeometry(2.4, 0.8, 0.4);
-    this.hurdleMat = new THREE.MeshStandardMaterial({
-      color: 0xff2244,
-      emissive: 0xff1133,
-      emissiveIntensity: 0.6,
-      metalness: 0.8,
-      roughness: 0.2
+    // ── Shared Matrix materials ─────────────────────────────────────────
+
+    // Neon energy beam core (hurdle bar)
+    this.energyBeamMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 4.0,
+      transparent: true, opacity: 0.95, metalness: 0, roughness: 0,
+      depthWrite: false,
     });
 
-    // 2. High Overhang (Require Slide) - Vibrant Cyber Amber Orange
-    this.overhangTopGeo = new THREE.BoxGeometry(2.6, 1.0, 0.6);
-    this.overhangPostGeo = new THREE.BoxGeometry(0.3, 3.2, 0.4);
-    this.overhangMat = new THREE.MeshStandardMaterial({
-      color: 0xff9900,
-      emissive: 0xff7700,
-      emissiveIntensity: 0.6,
-      metalness: 0.9,
-      roughness: 0.1
+    // Dark server-rack metal (posts, pillars)
+    this.metalFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x0a1a0f, emissive: 0x003311, emissiveIntensity: 0.4,
+      metalness: 0.9, roughness: 0.25,
     });
 
-    // 3. Full Blockade (Require Lane Change) - Electric Cyber Purple
-    this.blockadeGeo = new THREE.BoxGeometry(2.4, 3.0, 0.8);
-    this.blockadeMat = new THREE.MeshStandardMaterial({
-      color: 0x9333ea,
-      emissive: 0xa855f7,
-      emissiveIntensity: 0.5,
-      metalness: 0.8,
-      roughness: 0.2
+    // Holographic blockade wall (glassy neon)
+    this.holoWallMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 0.4,
+      metalness: 0.9, roughness: 0.1,
+      transparent: true, opacity: 0.85, depthWrite: false,
     });
 
-    // 4. Gold Coins - Classic Shiny Pure Gold
-    this.coinGeo = new THREE.CylinderGeometry(0.55, 0.55, 0.12, 16);
-    this.coinGeo.rotateX(Math.PI / 2); // Orient upright facing player
+    // Bright glowing frame edges
+    this.glowFrameMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 5.0,
+      metalness: 0, roughness: 0,
+    });
+
+    // Amber warning stripe on overhang bottom (signals DUCK)
+    this.warnStripeMat = new THREE.MeshStandardMaterial({
+      color: 0xff6600, emissive: 0xff4400, emissiveIntensity: 2.5,
+      metalness: 0.2, roughness: 0.1,
+    });
+
+    // Soft outer halo (hurdle glow bloom)
+    this.glowHaloMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 1.2,
+      transparent: true, opacity: 0.35, depthWrite: false,
+    });
+
+    // Scan-line material (blockade interior lines)
+    this.scanLineMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff66, emissive: 0x00ff66, emissiveIntensity: 3.0,
+      transparent: true, opacity: 0.45, depthWrite: false,
+    });
+
+    // ── Coin: Glowing digital data cube ────────────────────────
+    this.coinGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
     this.coinMat = new THREE.MeshStandardMaterial({
-      color: 0xffd700,
-      emissive: 0xffaa00,
-      emissiveIntensity: 0.7,
-      metalness: 0.95,
-      roughness: 0.1
+      color: 0x00ffaa, emissive: 0x00ff66, emissiveIntensity: 2.0,
+      metalness: 0.1, roughness: 0.05, transparent: true, opacity: 0.9,
     });
+
+    // ── Shared Geometries ──────────────────────────────────────────
+    this.hurdlePostGeo = new THREE.BoxGeometry(0.2, 1.0, 0.2);
+    this.hurdleBeamGeo = new THREE.BoxGeometry(2.3, 0.05, 0.05);
+
+    this.overhangPillarGeo = new THREE.BoxGeometry(0.22, 3.5, 0.3);
+    this.overhangHeaderGeo = new THREE.BoxGeometry(3.0, 0.55, 0.4);
+    this.overhangStripeGeo = new THREE.BoxGeometry(3.0, 0.07, 0.44);
+    this.overhangCapGeo = new THREE.BoxGeometry(0.25, 0.07, 0.33);
+
+    this.blockadeWallGeo = new THREE.BoxGeometry(2.4, 3.2, 0.1);
+    this.blockadeFTopGeo = new THREE.BoxGeometry(2.5, 0.2, 0.2);
+    this.blockadeFSideGeo = new THREE.BoxGeometry(0.2, 3.2, 0.2);
+    this.blockadeScanGeo = new THREE.BoxGeometry(2.3, 0.05, 0.15);
   }
 
   /**
@@ -61,34 +98,31 @@ export class ObstacleManager {
    * 4 spawn slots per chunk, each guaranteed to have an obstacle OR a coin run.
    */
   populateChunk(chunkGroup, isFirstChunk) {
-    if (isFirstChunk) return; // Keep starting area safe
+    if (isFirstChunk) return;
 
     const chunkLength = CONFIG.TRACK_CHUNK_LENGTH;
     const lanes = CONFIG.LANES;
 
-    // 4 evenly-spaced positions along the chunk
-    const zPositions = [
+    let zPositions = [
       -chunkLength * 0.38,
       -chunkLength * 0.13,
        chunkLength * 0.13,
-       chunkLength * 0.38
+       chunkLength * 0.38,
     ];
 
     zPositions.forEach((relZ) => {
-      // 0=Hurdle, 1=Overhang, 2=Blockade — always pick one (no empty slot)
       const obstacleType = Math.floor(Math.random() * 3);
       const blockedLanes = new Set();
 
       if (obstacleType === 0) {
-        const targetLane = Math.floor(Math.random() * 3);
-        blockedLanes.add(targetLane);
-        this.spawnHurdle(chunkGroup, lanes[targetLane], relZ);
+        const lane = Math.floor(Math.random() * 3);
+        blockedLanes.add(lane);
+        this.spawnHurdle(chunkGroup, lanes[lane], relZ);
       } else if (obstacleType === 1) {
-        const targetLane = Math.floor(Math.random() * 3);
-        blockedLanes.add(targetLane);
-        this.spawnOverhang(chunkGroup, lanes[targetLane], relZ);
+        const lane = Math.floor(Math.random() * 3);
+        blockedLanes.add(lane);
+        this.spawnOverhang(chunkGroup, lanes[lane], relZ);
       } else {
-        // Blockade: block 2 lanes, leave 1 open
         const openLane = Math.floor(Math.random() * 3);
         for (let l = 0; l < 3; l++) {
           if (l !== openLane) {
@@ -98,7 +132,6 @@ export class ObstacleManager {
         }
       }
 
-      // Spawn gold coins in an open safe lane
       const safeLanes = [0, 1, 2].filter((l) => !blockedLanes.has(l));
       if (safeLanes.length > 0) {
         const coinLane = safeLanes[Math.floor(Math.random() * safeLanes.length)];
@@ -107,97 +140,164 @@ export class ObstacleManager {
     });
   }
 
-
+  // ── HURDLE: Laser Fence — player must JUMP ─────────────────────
   spawnHurdle(chunkGroup, xPos, relZ) {
-    const hurdle = new THREE.Mesh(this.hurdleGeo, this.hurdleMat);
-    hurdle.position.set(xPos, 0.4, relZ);
-    hurdle.castShadow = true;
-    hurdle.receiveShadow = true;
+    const group = new THREE.Group();
 
-    hurdle.userData = { type: 'OBSTACLE', subType: 'HURDLE' };
-    chunkGroup.add(hurdle);
-    this.obstacles.push(hurdle);
+    // Sturdier vertical side posts (Monolith style)
+    const postL   = new THREE.Mesh(this.hurdlePostGeo, this.metalFrameMat);
+    const postR   = new THREE.Mesh(this.hurdlePostGeo, this.metalFrameMat);
+    postL.position.set(-1.15, 0.5, 0);
+    postR.position.set( 1.15, 0.5, 0);
+    postL.castShadow = postR.castShadow = true;
+
+    group.add(postL, postR);
+
+    // Multiple thin laser beams
+    for(let i=0; i<3; i++) {
+      const beam = new THREE.Mesh(this.hurdleBeamGeo, this.energyBeamMat);
+      beam.position.set(0, 0.6 + i*0.2, 0);
+      
+      const halo = new THREE.Mesh(this.hurdleBeamGeo, this.glowHaloMat);
+      halo.scale.set(1, 4, 4);
+      halo.position.copy(beam.position);
+      
+      group.add(beam, halo);
+    }
+
+    group.position.set(xPos, 0, relZ);
+    group.userData = { type: 'OBSTACLE', subType: 'HURDLE' };
+    chunkGroup.add(group);
+    this.obstacles.push(group);
   }
 
+  // ── OVERHANG: dark gate — player must SLIDE ───────────────────────────
   spawnOverhang(chunkGroup, xPos, relZ) {
-    const overhangGroup = new THREE.Group();
-    overhangGroup.position.set(xPos, 0, relZ);
+    const group = new THREE.Group();
 
-    const leftPost = new THREE.Mesh(this.overhangPostGeo, this.overhangMat);
-    leftPost.position.set(-1.3, 1.6, 0);
-    leftPost.castShadow = true;
+    // Tall side pillars
+    const pillarL   = new THREE.Mesh(this.overhangPillarGeo, this.metalFrameMat);
+    const pillarR   = new THREE.Mesh(this.overhangPillarGeo, this.metalFrameMat);
+    pillarL.position.set(-1.35, 1.75, 0);
+    pillarR.position.set( 1.35, 1.75, 0);
+    pillarL.castShadow = pillarR.castShadow = true;
 
-    const rightPost = new THREE.Mesh(this.overhangPostGeo, this.overhangMat);
-    rightPost.position.set(1.3, 1.6, 0);
-    rightPost.castShadow = true;
+    // Heavy overhead header (the thing player hits if standing)
+    const header    = new THREE.Mesh(this.overhangHeaderGeo, this.metalFrameMat);
+    header.position.set(0, 3.28, 0);
+    header.castShadow = true;
+    header.userData   = { type: 'OBSTACLE', subType: 'OVERHANG' };
 
-    const topBar = new THREE.Mesh(this.overhangTopGeo, this.overhangMat);
-    topBar.position.set(0, 2.7, 0);
-    topBar.castShadow = true;
-    topBar.userData = { type: 'OBSTACLE', subType: 'OVERHANG' };
+    // Amber warning stripe on bottom of header — signals DUCK
+    const stripe    = new THREE.Mesh(this.overhangStripeGeo, this.warnStripeMat);
+    stripe.position.set(0, 3.01, 0);
 
-    overhangGroup.add(leftPost);
-    overhangGroup.add(rightPost);
-    overhangGroup.add(topBar);
+    // Green caps on top of each pillar
+    const capL   = new THREE.Mesh(this.overhangCapGeo, this.glowFrameMat);
+    const capR   = new THREE.Mesh(this.overhangCapGeo, this.glowFrameMat);
+    capL.position.set(-1.35, 3.52, 0);
+    capR.position.set( 1.35, 3.52, 0);
 
-    chunkGroup.add(overhangGroup);
-    this.obstacles.push(topBar);
+    group.add(pillarL, pillarR, header, stripe, capL, capR);
+    group.position.set(xPos, 0, relZ);
+    chunkGroup.add(group);
+    this.obstacles.push(header); // header triggers OVERHANG collision
   }
 
+  // ── BLOCKADE: holographic wall — player must change LANE ─────────────
   spawnBlockade(chunkGroup, xPos, relZ) {
-    const blockade = new THREE.Mesh(this.blockadeGeo, this.blockadeMat);
-    blockade.position.set(xPos, 1.5, relZ);
-    blockade.castShadow = true;
-    blockade.receiveShadow = true;
+    const group = new THREE.Group();
 
-    blockade.userData = { type: 'OBSTACLE', subType: 'BLOCKADE' };
-    chunkGroup.add(blockade);
-    this.obstacles.push(blockade);
+    // Translucent holographic panel (Energy Shield)
+    const wall    = new THREE.Mesh(this.blockadeWallGeo, this.holoWallMat);
+    wall.position.y = 1.6;
+
+    // Shield Wireframe overlay
+    const wireMat = new THREE.MeshBasicMaterial({ color: 0x00ff66, wireframe: true, transparent: true, opacity: 0.15 });
+    const wireWall = new THREE.Mesh(this.blockadeWallGeo, wireMat);
+    wireWall.position.copy(wall.position);
+    wireWall.scale.set(1.01, 1.01, 1.01);
+
+    // Sturdy Metallic Frame
+    const frameTop = new THREE.Mesh(this.blockadeFTopGeo,  this.metalFrameMat);
+    const frameBot = new THREE.Mesh(this.blockadeFTopGeo,  this.metalFrameMat);
+    const frameL   = new THREE.Mesh(this.blockadeFSideGeo, this.metalFrameMat);
+    const frameR   = new THREE.Mesh(this.blockadeFSideGeo, this.metalFrameMat);
+    frameTop.position.set(0, 3.3, 0);
+    frameBot.position.set(0,  0.0, 0);
+    frameL.position.set(-1.25, 1.6, 0);
+    frameR.position.set( 1.25, 1.6, 0);
+
+    // Warning / Glitching scanlines
+    const scan1   = new THREE.Mesh(this.blockadeScanGeo, this.glowFrameMat);
+    const scan2   = new THREE.Mesh(this.blockadeScanGeo, this.glowFrameMat);
+    scan1.position.set(0, 2.4, 0);
+    scan2.position.set(0, 0.8, 0);
+
+    group.add(wall, wireWall, frameTop, frameBot, frameL, frameR, scan1, scan2);
+    group.position.set(xPos, 0, relZ);
+    group.userData = { type: 'OBSTACLE', subType: 'BLOCKADE' };
+    chunkGroup.add(group);
+    this.obstacles.push(group);
   }
 
+  // ── COINS: glowing digital cube ─────────────
   spawnCoinSequence(chunkGroup, xPos, startRelZ) {
     const coinCount = 3 + Math.floor(Math.random() * 3);
-    const spacing = 2.5;
+    const spacing   = 2.5;
 
     for (let i = 0; i < coinCount; i++) {
       const coin = new THREE.Mesh(this.coinGeo, this.coinMat);
-      coin.position.set(xPos, 1.1, startRelZ - i * spacing);
-      coin.castShadow = true;
-
-      coin.userData = { type: 'COIN', collected: false };
+      coin.position.set(xPos, 1.15, startRelZ - i * spacing);
+      coin.userData = { type: 'COIN', collected: false, idx: i };
       chunkGroup.add(coin);
       this.coins.push(coin);
     }
   }
 
-  update(delta) {
+  update(dt) {
+    this.time += dt;
+
+    // Pulse / Glitch effect on the obstacle materials
+    if (this.holoWallMat && this.glowHaloMat) {
+      // Base pulse
+      const pulse = Math.sin(this.time * 6) * 0.1;
+      
+      // Random glitch
+      const glitch = Math.random() > 0.95 ? (Math.random() * -0.3) : 0;
+      
+      this.holoWallMat.opacity = Math.max(0.2, Math.min(0.8, 0.45 + pulse + glitch));
+      this.glowHaloMat.opacity = Math.max(0, Math.min(1, 0.25 + pulse * 0.5 + glitch));
+    }
+
+    const t = Date.now() * 0.003;
     for (let i = 0; i < this.coins.length; i++) {
       const coin = this.coins[i];
       if (coin && !coin.userData.collected) {
-        coin.rotation.y += 3.5 * delta;
+        coin.rotation.y += 2.2 * dt;
+        coin.rotation.x += 1.5 * dt;
+        // Gentle float
+        coin.position.y = 1.15 + Math.sin(t + i * 1.2) * 0.14;
       }
     }
   }
+
 
   /**
    * Tight AABB Collision Detection per Lane
    */
   checkCollisions(playerGroup, isJumping, isSliding, onCoinCollect, onObstacleHit) {
-    const playerWorldPos = new THREE.Vector3();
-    playerGroup.getWorldPosition(playerWorldPos);
+    playerGroup.getWorldPosition(this._playerWorldPos);
 
     // Tight Player Bounding Box
     const halfWidth = 0.28;
     const halfDepth = 0.25;
-    const minY = playerWorldPos.y;
-    const maxY = playerWorldPos.y + (isSliding ? 0.8 : 2.2);
+    const minY = this._playerWorldPos.y;
+    const maxY = this._playerWorldPos.y + (isSliding ? 0.8 : 2.2);
 
-    const playerBox = new THREE.Box3(
-      new THREE.Vector3(playerWorldPos.x - halfWidth, minY, playerWorldPos.z - halfDepth),
-      new THREE.Vector3(playerWorldPos.x + halfWidth, maxY, playerWorldPos.z + halfDepth)
-    );
-
-    const obsBox = new THREE.Box3();
+    this._playerBoxMin.set(this._playerWorldPos.x - halfWidth, minY, this._playerWorldPos.z - halfDepth);
+    this._playerBoxMax.set(this._playerWorldPos.x + halfWidth, maxY, this._playerWorldPos.z + halfDepth);
+    this._playerBox.set(this._playerBoxMin, this._playerBoxMax);
 
     // 1. Check Obstacle Collisions
     for (let i = this.obstacles.length - 1; i >= 0; i--) {
@@ -207,35 +307,26 @@ export class ObstacleManager {
         continue;
       }
 
-      const obstacleWorldPos = new THREE.Vector3();
-      obstacle.getWorldPosition(obstacleWorldPos);
+      obstacle.getWorldPosition(this._obstacleWorldPos);
 
       // Proximity pre-check: skip if far away in Z.
-      // Window is wide enough that even at max speed (65 m/s, ~1m/frame)
-      // the obstacle is detected multiple frames before the player reaches it.
-      const deltaZ = Math.abs(obstacleWorldPos.z - playerWorldPos.z);
+      const deltaZ = Math.abs(this._obstacleWorldPos.z - this._playerWorldPos.z);
       if (deltaZ > 4.0) continue;
 
       const subType = obstacle.userData ? obstacle.userData.subType : 'BLOCKADE';
 
       if (subType === 'HURDLE') {
-        // Low Hurdle: blocked Y 0 → 0.85. Must JUMP to clear.
-        obsBox.min.set(obstacleWorldPos.x - 1.1, 0,    obstacleWorldPos.z - 0.3);
-        obsBox.max.set(obstacleWorldPos.x + 1.1, 0.85, obstacleWorldPos.z + 0.3);
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,    this._obstacleWorldPos.z - 0.3);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 0.85, this._obstacleWorldPos.z + 0.3);
       } else if (subType === 'OVERHANG') {
-        // Overhang beam spans Y 2.2→3.2 visually.
-        // Player standing maxY = 2.2 — gap of only 0.05 vs old minY 2.25 caused no collision.
-        // Set minY = 1.6 so standing player (maxY 2.2) clearly intersects.
-        // Sliding player maxY = 0.8 < 1.6, so slide safely clears it. ✓
-        obsBox.min.set(obstacleWorldPos.x - 1.2, 1.6, obstacleWorldPos.z - 0.4);
-        obsBox.max.set(obstacleWorldPos.x + 1.2, 3.2, obstacleWorldPos.z + 0.4);
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.2, 1.6, this._obstacleWorldPos.z - 0.4);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.2, 3.2, this._obstacleWorldPos.z + 0.4);
       } else {
-        // Full Blockade: full height. Must change LANE.
-        obsBox.min.set(obstacleWorldPos.x - 1.1, 0,   obstacleWorldPos.z - 0.5);
-        obsBox.max.set(obstacleWorldPos.x + 1.1, 3.2, obstacleWorldPos.z + 0.5);
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,   this._obstacleWorldPos.z - 0.5);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 3.2, this._obstacleWorldPos.z + 0.5);
       }
 
-      if (playerBox.intersectsBox(obsBox)) {
+      if (this._playerBox.intersectsBox(this._obsBox)) {
         onObstacleHit(obstacle);
         return;
       }
@@ -246,15 +337,14 @@ export class ObstacleManager {
       const coin = this.coins[i];
       if (!coin || coin.userData.collected || !coin.parent) continue;
 
-      const coinWorldPos = new THREE.Vector3();
-      coin.getWorldPosition(coinWorldPos);
+      coin.getWorldPosition(this._coinWorldPos);
 
-      if (Math.abs(coinWorldPos.z - playerWorldPos.z) > 1.8) continue;
+      if (Math.abs(this._coinWorldPos.z - this._playerWorldPos.z) > 1.8) continue;
 
-      obsBox.min.set(coinWorldPos.x - 0.6, coinWorldPos.y - 0.6, coinWorldPos.z - 0.6);
-      obsBox.max.set(coinWorldPos.x + 0.6, coinWorldPos.y + 0.6, coinWorldPos.z + 0.6);
+      this._obsBox.min.set(this._coinWorldPos.x - 0.6, this._coinWorldPos.y - 0.6, this._coinWorldPos.z - 0.6);
+      this._obsBox.max.set(this._coinWorldPos.x + 0.6, this._coinWorldPos.y + 0.6, this._coinWorldPos.z + 0.6);
 
-      if (playerBox.intersectsBox(obsBox)) {
+      if (this._playerBox.intersectsBox(this._obsBox)) {
         coin.userData.collected = true;
 
         gsap.to(coin.scale, {
@@ -278,7 +368,9 @@ export class ObstacleManager {
   }
 
   reset() {
-    // Clear arrays — chunk re-placement removes meshes from scene graph
+    // Kill any in-flight collect animations before clearing — prevents ghost
+    // scale/position tweens firing on recycled coin slots after restart.
+    this.coins.forEach((c) => { if (c) gsap.killTweensOf(c); });
     this.obstacles.length = 0;
     this.coins.length = 0;
   }

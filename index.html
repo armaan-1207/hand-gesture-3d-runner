@@ -27,19 +27,11 @@
         <span id="score-display" class="hud-value">0<small>m</small></span>
       </div>
       <div class="hud-card coins-card">
-        <span class="hud-label">COINS</span>
-        <span class="hud-value-row">
-          <svg class="coin-icon" viewBox="0 0 24 24" width="24" height="24">
-            <circle cx="12" cy="12" r="10" fill="#ffd700" stroke="#b8860b" stroke-width="2"/>
-            <path d="M12 6v12M9 9h6" stroke="#745100" stroke-width="2.5" stroke-linecap="round"/>
-          </svg>
-          <span id="coins-display" class="hud-value">0</span>
-        </span>
+        <div class="hud-label">COINS</div>
+        <div class="hud-value" id="coins-display"><span style="color:#00ff66;font-size:1.4rem;">⛁</span> 0</div>
       </div>
-      <div class="hud-card speed-card">
-        <span class="hud-label">SPEED</span>
-        <span id="speed-display" class="hud-value">1.0<small>x</small></span>
-      </div>
+      <!-- OWASP Logo in top right replacing SPEED panel -->
+      <img src="/logo-white.png" id="owasp-logo" alt="OWASP Logo">
     </div>
 
     <!-- Webcam Hand Tracking PiP Box -->
@@ -55,6 +47,7 @@
     <div id="start-screen" class="overlay-modal">
       <div class="modal-card">
         <div class="badge">MATRIX ENDLESS RUNNER</div>
+        <img src="/logo-white.png" class="game-logo-img" alt="Matrix Runner Logo" />
         <h1 class="title">MATRIX<span class="highlight">RUNNER</span></h1>
         <p class="subtitle">Dodge cyber blockades, leap crimson hurdles, slide under overhangs & gather gold coins!</p>
         

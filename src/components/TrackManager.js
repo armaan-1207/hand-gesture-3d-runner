@@ -38,7 +38,7 @@ export class TrackManager {
     }
 
     // Position all chunks sequentially starting from nextChunkZ
-    // First 3 chunks are safe (180m runway), rest have obstacles
+    // First 3 chunks are safe (~90m runway = ~3.5 seconds at start speed), rest have obstacles
     for (let i = 0; i < this._pool.length; i++) {
       const isFirst = (i < 3);
       this._placeChunk(this._pool[i], isFirst);
@@ -50,12 +50,17 @@ export class TrackManager {
   }
 
   _initSharedResources() {
-    // Ground
-    this.groundGeo = new THREE.PlaneGeometry(12, this.chunkLength);
-    this.groundMat = new THREE.MeshStandardMaterial({
-      color: 0x050a06,
-      roughness: 0.4,
-      metalness: 0.4
+    // 1. Solid black base floor (so we can't see through the world)
+    this.baseGroundGeo = new THREE.PlaneGeometry(12, this.chunkLength);
+    this.baseGroundMat = new THREE.MeshBasicMaterial({ color: 0x020502 });
+
+    // 2. Glowing wireframe grid on top of the base floor
+    this.gridGroundGeo = new THREE.PlaneGeometry(12, this.chunkLength, 12, Math.floor(this.chunkLength));
+    this.gridGroundMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff66,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.15
     });
 
     // Lane dividers
@@ -79,6 +84,8 @@ export class TrackManager {
     this.lightGlobeGeo = new THREE.SphereGeometry(0.4, 8, 8); // reduced segments for perf
     this.lightGlobeMat = new THREE.MeshBasicMaterial({ color: 0x00ff66 });
 
+
+
     // Arch
     this.archTopGeo  = new THREE.BoxGeometry(13.6, 0.6, 0.8);
     this.archSideGeo = new THREE.BoxGeometry(0.6, 6.5, 0.8);
@@ -99,41 +106,46 @@ export class TrackManager {
    * obstacleManager.populateChunk per recycle.
    */
   _buildChunkGroup() {
-    const g = new THREE.Group();
-    g.userData.isFirstChunk = false;
+    const group = new THREE.Group();
+    group.userData.isFirstChunk = false;
 
-    // Ground
-    const ground = new THREE.Mesh(this.groundGeo, this.groundMat);
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    g.add(ground);
+    // Base black ground
+    const baseGround = new THREE.Mesh(this.baseGroundGeo, this.baseGroundMat);
+    baseGround.rotation.x = -Math.PI / 2;
+    baseGround.receiveShadow = true;
+    group.add(baseGround);
 
-    // Lane dividers
+    // Wireframe grid
+    const gridGround = new THREE.Mesh(this.gridGroundGeo, this.gridGroundMat);
+    gridGround.rotation.x = -Math.PI / 2;
+    gridGround.position.y = 0.01; // slightly above base to prevent z-fighting
+    group.add(gridGround);
+
+    // Left Lane line
     const lineL = new THREE.Mesh(this.lineGeo, this.lineMatGreen);
     lineL.rotation.x = -Math.PI / 2;
     lineL.position.set(-1.75, 0.01, 0);
-    g.add(lineL);
+    group.add(lineL);
 
     const lineR = new THREE.Mesh(this.lineGeo, this.lineMatLime);
     lineR.rotation.x = -Math.PI / 2;
     lineR.position.set(1.75, 0.01, 0);
-    g.add(lineR);
+    group.add(lineR);
 
     // Curbs
     const curbL = new THREE.Mesh(this.curbGeo, this.curbMat);
     curbL.position.set(-6, 0.2, 0);
-    g.add(curbL);
+    group.add(curbL);
 
     const curbR = new THREE.Mesh(this.curbGeo, this.curbMat);
     curbR.position.set(6, 0.2, 0);
-    g.add(curbR);
+    group.add(curbR);
 
     // 3 boundary tower groups along chunk length
     const zOffsets = [-this.chunkLength * 0.35, 0, this.chunkLength * 0.35];
     zOffsets.forEach((relZ) => {
       const tL = new THREE.Mesh(this.towerGeo, this.towerMat);
       tL.position.set(-7.5, 4.0, relZ);
-      // castShadow = false on boundary decor for perf
 
       const gL = new THREE.Mesh(this.lightGlobeGeo, this.lightGlobeMat);
       gL.position.set(-7.5, 8.2, relZ);
@@ -144,7 +156,7 @@ export class TrackManager {
       const gR = new THREE.Mesh(this.lightGlobeGeo, this.lightGlobeMat);
       gR.position.set(7.5, 8.2, relZ);
 
-      g.add(tL, gL, tR, gR);
+      group.add(tL, gL, tR, gR);
     });
 
     // Arch decoration group (always built, shown/hidden by opacity toggle)
@@ -159,7 +171,7 @@ export class TrackManager {
     archR.position.set(6.5, 3.25, 0);
     archGroup.add(archTop, archL, archR);
     archGroup.visible = false;
-    g.add(archGroup);
+    group.add(archGroup);
 
     // Pillar decoration group
     const pillarGroup = new THREE.Group();
@@ -170,9 +182,9 @@ export class TrackManager {
     pilR.position.set(6.8, 4.0, 0);
     pillarGroup.add(pilL, pilR);
     pillarGroup.visible = false;
-    g.add(pillarGroup);
+    group.add(pillarGroup);
 
-    return g;
+    return group;
   }
 
   /**
@@ -193,9 +205,8 @@ export class TrackManager {
     if (pillarGroup) pillarGroup.visible = false;
 
     if (!isFirstChunk) {
-      const v = Math.floor(Math.random() * 3);
-      if (v === 1 && archGroup)   archGroup.visible   = true;
-      if (v === 2 && pillarGroup) pillarGroup.visible = true;
+      // All decorations (arches, inner pillars) have been removed based on user feedback
+      // so the track remains visually clear.
     }
 
     // ── Purge stale obstacle & coin references from the manager arrays ──
@@ -254,14 +265,17 @@ export class TrackManager {
    * by MOVING them (not creating new ones), zero GC pressure.
    */
   update(playerZ) {
-    // Player moves in negative Z. Recycle a chunk when its center Z is
+    // Player moves in -Z. Recycle a chunk when its centre Z is
     // more than 1 chunk-length BEHIND (i.e., more positive Z than) the player.
     const recycleThreshold = playerZ + this.chunkLength;
 
-    const oldest = this._pool[this._head];
-    if (oldest && oldest.position.z > recycleThreshold) {
+    // Use while so multiple stale chunks are caught up after a frame spike,
+    // not just one-per-frame (bug fix from code review).
+    let oldest = this._pool[this._head];
+    while (oldest && oldest.position.z > recycleThreshold) {
       this._placeChunk(oldest, false);
       this._head = (this._head + 1) % this._pool.length;
+      oldest = this._pool[this._head];
     }
   }
 
