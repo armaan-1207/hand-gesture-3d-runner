@@ -178,8 +178,8 @@ html, body {
 }
 
 #debug-canvas {
-  width: 220px;
-  height: 165px;
+  width: 320px;
+  height: 240px;
   border-radius: 10px;
   background: #000;
   border: 1px solid rgba(255, 255, 255, 0.1);

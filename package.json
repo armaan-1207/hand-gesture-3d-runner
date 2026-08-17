@@ -11,10 +11,13 @@
   "dependencies": {
     "@mediapipe/camera_utils": "^0.3.1675466862",
     "@mediapipe/hands": "^0.4.1675469240",
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "fingerpose": "^0.1.0",
     "gsap": "^3.12.5",
     "three": "^0.170.0"
   },
   "devDependencies": {
+    "puppeteer": "^25.7.0",
     "vite": "^5.4.0"
   }
 }

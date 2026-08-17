@@ -209,50 +209,17 @@ export class TrackManager {
       // so the track remains visually clear.
     }
 
-    // ── Purge stale obstacle & coin references from the manager arrays ──
-    // Walk the chunk children, collect which mesh objects belong to this chunk,
-    // then filter them out of the manager arrays BEFORE removing from scene graph.
+    // ── Purge stale obstacle & coin references back to their pools ──
     if (this.obstacleManager) {
-      const chunkSet = new Set();
-      chunkGroup.traverse((child) => {
-        if (child.isMesh && child.userData &&
-            (child.userData.type === 'OBSTACLE' || child.userData.type === 'COIN')) {
-          chunkSet.add(child);
+      const toRelease = [];
+      for (let i = chunkGroup.children.length - 1; i >= 0; i--) {
+        const child = chunkGroup.children[i];
+        if (child && child.userData && (child.userData.type === 'OBSTACLE' || child.userData.type === 'COIN')) {
+          toRelease.push(child);
         }
-      });
-      if (chunkSet.size > 0) {
-        // Filter in-place without creating new arrays
-        let w = 0;
-        for (let r = 0; r < this.obstacleManager.obstacles.length; r++) {
-          if (!chunkSet.has(this.obstacleManager.obstacles[r]))
-            this.obstacleManager.obstacles[w++] = this.obstacleManager.obstacles[r];
-        }
-        this.obstacleManager.obstacles.length = w;
-
-        w = 0;
-        for (let r = 0; r < this.obstacleManager.coins.length; r++) {
-          if (!chunkSet.has(this.obstacleManager.coins[r]))
-            this.obstacleManager.coins[w++] = this.obstacleManager.coins[r];
-        }
-        this.obstacleManager.coins.length = w;
       }
+      toRelease.forEach((node) => this.obstacleManager.releaseNode(node));
     }
-
-    // Remove old obstacle/coin meshes & groups from the chunk's scene node
-    const toRemove = [];
-    for (let i = chunkGroup.children.length - 1; i >= 0; i--) {
-      const child = chunkGroup.children[i];
-      if (!child) continue;
-      // Direct obstacle or coin mesh
-      if (child.userData && (child.userData.type === 'OBSTACLE' || child.userData.type === 'COIN')) {
-        toRemove.push(child);
-      }
-      // Anonymous group containing obstacle children (overhang)
-      else if (child.isGroup && !child.name) {
-        toRemove.push(child);
-      }
-    }
-    toRemove.forEach((m) => chunkGroup.remove(m));
 
     // Populate fresh obstacles & coins
     if (this.obstacleManager) {

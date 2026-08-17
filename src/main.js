@@ -13,9 +13,14 @@ export const CONFIG = {
   LANES: [-3.5, 0, 3.5],
   CAMERA_OFFSET: new THREE.Vector3(0, 4.5, 8.5),
   CAMERA_LOOK_AHEAD: new THREE.Vector3(0, 1.5, -12),
-  INITIAL_SPEED: 28,
+  INITIAL_SPEED: 24,
   MAX_SPEED: 65,
-  ACCELERATION: 0.35,
+  ACCELERATION: 0.25,
+  // Hand-tracking gets its own, gentler pace — gesture input has more
+  // latency than a keypress, so it needs more reaction time.
+  HAND_INITIAL_SPEED: 15,
+  HAND_MAX_SPEED: 38,
+  HAND_ACCELERATION: 0.12,
   JUMP_HEIGHT: 3.4,
   JUMP_DURATION: 0.55,
   SLIDE_DURATION: 0.65,
@@ -67,6 +72,8 @@ class CyberRunnerGame {
     // Vision Engine HandTracker Instance
     this.handTracker = null;
 
+    // Audio Engine
+    
     // Scratch vector — reused every frame in camera follow (avoids GC pressure)
     this._lookAtTarget = new THREE.Vector3();
 
@@ -117,6 +124,7 @@ class CyberRunnerGame {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
 
@@ -458,7 +466,7 @@ class CyberRunnerGame {
 
   jump() {
     if (this.isJumping) return;
-
+    
     if (this.isSliding && this.slideTimeline) {
       this.slideTimeline.kill();
       this.isSliding = false;
@@ -519,31 +527,36 @@ class CyberRunnerGame {
 
     if (this.slideTimeline) this.slideTimeline.kill();
 
+    // Cross-fade into the slide FBX animation if available
+    if (this.actions && this.actions.slide) {
+      if (this.currentAction && this.currentAction !== this.actions.slide) {
+        this.currentAction.fadeOut(0.15);
+      }
+      this.actions.slide.reset().setEffectiveTimeScale(1.4).setEffectiveWeight(1).fadeIn(0.15).play();
+      this.currentAction = this.actions.slide;
+    }
+
+    const duration = CONFIG.SLIDE_DURATION;
+
     this.slideTimeline = gsap.timeline({
       onComplete: () => {
         this.isSliding = false;
         this.playerGroup.scale.set(1, 1, 1);
         this.playerGroup.rotation.set(0, 0, 0);
+        // Cross-fade back to run
+        if (this.actions && this.actions.run) {
+          if (this.currentAction) this.currentAction.fadeOut(0.2);
+          this.actions.run.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+          this.currentAction = this.actions.run;
+        }
       }
     });
 
-    const duration = CONFIG.SLIDE_DURATION;
-
-    // Procedural crouch (original logic: squish down and stretch out)
+    // Slight positional crouch during slide (keeps hitbox low)
     this.slideTimeline
-      .to(this.playerGroup.scale, {
-        y: 0.45,
-        z: 1.3,
-        duration: 0.1,
-        ease: 'power2.out'
-      })
+      .to(this.playerGroup.scale, { y: 0.55, z: 1.2, duration: 0.1, ease: 'power2.out' })
       .to({}, { duration: duration - 0.2 })
-      .to(this.playerGroup.scale, {
-        y: 1,
-        z: 1,
-        duration: 0.1,
-        ease: 'power2.inOut'
-      });
+      .to(this.playerGroup.scale, { y: 1, z: 1, duration: 0.1, ease: 'power2.inOut' });
   }
 
   bindUIEvents() {
@@ -585,13 +598,14 @@ class CyberRunnerGame {
   }
 
   applySpeedSettings() {
-    // Slower pacing for AI hand controls to allow player to adapt
     if (this.handTracker && this.handTracker.isTracking) {
-      this.speed = 18; // Increased from 13 so it matches the running animation and doesn't look like moonwalking
-      this.currentAcceleration = 0.18; 
+      this.speed = CONFIG.HAND_INITIAL_SPEED;
+      this.currentAcceleration = CONFIG.HAND_ACCELERATION;
+      this.maxSpeed = CONFIG.HAND_MAX_SPEED;
     } else {
       this.speed = CONFIG.INITIAL_SPEED;
       this.currentAcceleration = CONFIG.ACCELERATION;
+      this.maxSpeed = CONFIG.MAX_SPEED;
     }
   }
 
@@ -602,7 +616,7 @@ class CyberRunnerGame {
     this.playerGroup.rotation.set(0, 0, 0);
     this.startScreen.classList.add('hidden');
     this.applySpeedSettings();
-    this.playCinematicIntro();
+            this.playCinematicIntro();
   }
 
   restartGame() {
@@ -643,14 +657,14 @@ class CyberRunnerGame {
     }
 
     this.clock.start();
-  }
+      }
 
   onCollectCoin() {
     this.coins += 1;
     if (this.coinsDisplay) {
       this.coinsDisplay.textContent = this.coins;
     }
-
+    
     const coinCard = document.querySelector('.coins-card');
     if (coinCard) {
       gsap.fromTo(coinCard, 
@@ -666,6 +680,8 @@ class CyberRunnerGame {
     this.gameState = 'GAMEOVER';
     if (this.handTracker) this.handTracker.isGameOver = true;
 
+    // Audio: crash SFX and fade out BGM
+        
     if (this.jumpTimeline) this.jumpTimeline.kill();
     if (this.slideTimeline) this.slideTimeline.kill();
     if (this.laneTween) this.laneTween.kill();
@@ -698,53 +714,19 @@ class CyberRunnerGame {
   }
 
   /**
-   * Temple Run–style cinematic intro.
-   * Camera starts at Neo's face level, then sweeps up and back to game position.
-   * State is 'CINEMATIC' during this — physics are paused, camera follow is off.
+   * Instantly starts the game (Cinematic intro removed per user request).
    */
   playCinematicIntro() {
-    this.gameState = 'CINEMATIC';
+    this.gameState = 'PLAYING';
 
-    // Camera starts at Neo's face level, close and in front
-    const pz = this.playerGroup.position.z;
-    this.camera.position.set(0, 2.0, pz + 3.8);
-    this._lookAtTarget.set(0, 1.5, pz);
-    this.camera.lookAt(this._lookAtTarget);
+    if (this.actions.run) {
+      if (this.currentAction) this.currentAction.fadeOut(0.2);
+      this.actions.run.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
+      this.currentAction = this.actions.run;
+    }
 
-    const destZ = pz + CONFIG.CAMERA_OFFSET.z;
-    const destY = CONFIG.CAMERA_OFFSET.y;
-
-    const tl = gsap.timeline({
-      onComplete: () => {
-        this.gameState = 'PLAYING';
-        if (this.actions.run) {
-          if (this.currentAction) this.currentAction.fadeOut(0.2);
-          this.actions.run.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
-          this.currentAction = this.actions.run;
-        }
-
-        this.hud.classList.remove('hidden');
-        this.clock.start();
-      },
-    });
-
-    // Act 1 — Hold close-up on Neo (1.2 s)
-    tl.to({}, { duration: 1.2 });
-
-    // Act 2 — Temple Run swoop: camera arcs UP and BACK (2.0 s)
-    tl.to(this.camera.position, {
-      y: destY,
-      z: destZ,
-      duration: 2.0,
-      ease: 'power2.inOut',
-      onUpdate: () => {
-        this._lookAtTarget.set(0, 1.5, this.playerGroup.position.z - 5);
-        this.camera.lookAt(this._lookAtTarget);
-      },
-    });
-
-    // Act 3 — Settle (0.5 s)
-    tl.to({}, { duration: 0.5 });
+    this.hud.classList.remove('hidden');
+    this.clock.start();
   }
 
   createMatrixRain() {
@@ -811,8 +793,15 @@ class CyberRunnerGame {
     const delta = Math.min(this.clock.getDelta(), 0.1);
 
     if (this.mixer) {
-      // Clamp animation speed to 0.8x minimum so it never looks like slow-motion lag
-      const animMultiplier = Math.max(0.8, this.speed / CONFIG.INITIAL_SPEED);
+      // The original animation was perfectly synced to the ground at a speed of 28.
+      let animMultiplier = this.speed / 28;
+
+      // Boost the animation speed by 50% when using AI gesture control to make the 
+      // character look highly energetic and fast, offsetting the physically slower ground speed.
+      if (this.handTracker && this.handTracker.isTracking) {
+        animMultiplier *= 1.5;
+      }
+
       this.mixer.update(delta * animMultiplier);
     }
 
@@ -827,7 +816,7 @@ class CyberRunnerGame {
       }
 
       // 1. Forward continuous acceleration
-      if (this.speed < CONFIG.MAX_SPEED) {
+      if (this.speed < (this.maxSpeed || CONFIG.MAX_SPEED)) {
         this.speed += this.currentAcceleration * delta;
       }
 
@@ -840,7 +829,10 @@ class CyberRunnerGame {
         this.scoreDisplay.innerHTML = `${this.distance}<small>m</small>`;
       }
       if (this.speedDisplay) {
-        const speedMultiplier = (this.speed / CONFIG.INITIAL_SPEED).toFixed(1);
+        const baseline = (this.handTracker && this.handTracker.isTracking)
+          ? CONFIG.HAND_INITIAL_SPEED
+          : CONFIG.INITIAL_SPEED;
+        const speedMultiplier = (this.speed / baseline).toFixed(1);
         this.speedDisplay.innerHTML = `${speedMultiplier}<small>x</small>`;
       }
 
@@ -901,9 +893,12 @@ class CyberRunnerGame {
   }
 
   onWindowResize() {
-    this.camera.aspect = window.innerWidth / window.innerHeight;
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+    if (this.resizeTimeout) clearTimeout(this.resizeTimeout);
+    this.resizeTimeout = setTimeout(() => {
+      this.camera.aspect = window.innerWidth / window.innerHeight;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(window.innerWidth, window.innerHeight);
+    }, 150);
   }
 }
 

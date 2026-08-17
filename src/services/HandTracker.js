@@ -1,4 +1,5 @@
-import { LandmarkSmoother3D } from '../utils/OneEuroFilter.js';
+import { LandmarkSmoother3D, OneEuroFilter } from '../utils/OneEuroFilter.js';
+import { gestureEstimator } from '../utils/gestures.js';
 
 export class HandTracker {
   constructor(options = {}) {
@@ -14,19 +15,29 @@ export class HandTracker {
     this.isGameOver = false;
 
     // Central ROI Anchor Zone
-    this.roi = { minX: 0.20, minY: 0.15, maxX: 0.80, maxY: 0.85 };
+    this.roi = { minX: 0.05, minY: 0.05, maxX: 0.95, maxY: 0.95 };
 
     // Minimum Bounding Box Area ratio relative to largest hand in frame
     this.areaThresholdRatio = 0.45;
 
     // Landmark Smoother (One-Euro Filter tuned for low jitter)
     this.smoother = new LandmarkSmoother3D(21);
+    
+    // Centroid Filters for hyper-stable gesture tracking
+    this.centroidXFilter = new OneEuroFilter(30, 1.2, 0.004, 1.0); // lower beta = more stable
+    this.centroidYFilter = new OneEuroFilter(30, 1.0, 0.008, 1.0); // normal beta = snappy transients
 
     // Gesture State & Cooldown Timers
     this.lastHandPos = null;
     this.lastHandTime = 0;
     this.lastActionTime = 0;
-    this.actionCooldownMs = 350; // Reduced from 600ms to allow faster double-swipes, but long enough for return stroke absorption
+    this.actionCooldownMs = 350;
+
+    // Rolling Y-position history for reliable swipe velocity detection.
+    // Single-frame velocity is killed by the One-Euro filter's smoothing;
+    // measuring across 5 frames catches the full arc of a real swipe.
+    this._handYHistory = []; // [{ y, t }, ...]
+    this._handYHistorySize = 5;
 
     // FPS Throttling for zero WebGL lag
     this.lastFrameSendTime = 0;
@@ -143,6 +154,9 @@ export class HandTracker {
     this.isTracking = false;
     this.lockedTarget = null;
     this.smoother.reset();
+    this._laneZone = undefined;
+    this.anchorY = undefined;
+    this.lastHandShape = undefined;
     if (this.onTrackingStateChange) this.onTrackingStateChange(false);
   }
 
@@ -193,7 +207,11 @@ export class HandTracker {
       const width = maxX - minX;
       const height = maxY - minY;
       const area = width * height;
-      const centroid = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+      
+      // FIX: Use the middle knuckle (Landmark 9) instead of the bounding box center.
+      // This prevents the "centroid" from instantly shifting down when you close your fist!
+      const stablePoint = landmarks[9]; 
+      const centroid = { x: stablePoint.x, y: stablePoint.y };
       const inROI =
         centroid.x >= this.roi.minX &&
         centroid.x <= this.roi.maxX &&
@@ -251,6 +269,9 @@ export class HandTracker {
 
       if (selectedHand) {
         this.framesSinceLastLock = 0;
+        this.smoother.reset();
+        this.centroidXFilter.reset();
+        this.centroidYFilter.reset();
       }
     }
 
@@ -262,11 +283,16 @@ export class HandTracker {
         lastSeenFrame: this.frameCount
       };
 
+      const now = performance.now();
+      // Apply One-Euro Filter to Centroid for hyper-stable swiping
+      selectedHand.centroid.x = this.centroidXFilter.filter(selectedHand.centroid.x, now);
+      selectedHand.centroid.y = this.centroidYFilter.filter(selectedHand.centroid.y, now);
+
       // Apply One-Euro Filter Landmark Smoothing
       const smoothedLandmarks = this.smoother.smooth(selectedHand.landmarks);
       selectedHand.smoothedLandmarks = smoothedLandmarks;
 
-      // Recognize & Dispatch Gesture Controls
+      // Recognize & Dispatch Gesture Controls (using filtered centroid!)
       this.recognizeGestures(selectedHand);
 
       if (this.onPrimaryHandUpdate) {
@@ -277,7 +303,8 @@ export class HandTracker {
     }
 
     // 5. Debug Overlay Canvas Rendering
-    if (canvas && ctx) {
+    // Skip heavy canvas drawing if PiP is hidden
+    if (canvas && ctx && !this.canvasElement.parentElement.classList.contains('hidden')) {
       candidateHands.forEach((hand) => {
         const isPrimary = selectedHand && hand.index === selectedHand.index;
         const color = isPrimary ? '#00ff66' : '#ff3355';
@@ -311,64 +338,126 @@ export class HandTracker {
    */
   recognizeGestures(hand) {
     const now = performance.now();
-    if (now - this.lastActionTime < this.actionCooldownMs) return;
-
-    const wrist = hand.smoothedLandmarks[0];
     const handX = 1.0 - hand.centroid.x; // Mirrored camera X
     const handY = hand.centroid.y;
 
-    if (this.isGameOver) {
-      return;
+    if (this.isGameOver) return;
+
+    // ── 1. Continuous lane control ──────────────────────────────────
+    // Lane follows hand position directly every frame. Hysteresis stops
+    // flicker near lane boundaries.
+    // IMPORTANT: Lane is FROZEN during actionCooldownMs after a jump/slide
+    // so that the natural arm arc of a swipe doesn't accidentally shift lanes.
+    if (this._laneZone === undefined) this._laneZone = 1; // start center
+
+    const inCooldown = (now - this.lastActionTime) < this.actionCooldownMs;
+
+    if (!inCooldown) {
+      if (this._laneZone !== 0 && handX < 0.32) {
+        this._laneZone = 0;
+      } else if (this._laneZone !== 2 && handX > 0.68) {
+        this._laneZone = 2;
+      } else if (this._laneZone === 0 && handX > 0.38) {
+        this._laneZone = 1;
+      } else if (this._laneZone === 2 && handX < 0.62) {
+        this._laneZone = 1;
+      }
     }
 
-    if (!this.anchorPos) {
-      this.anchorPos = { x: handX, y: handY };
-      this.lastActionTime = now;
+    if (this.onSetLane) this.onSetLane(this._laneZone);
+
+    // ── 2. Discrete gestures (slide / jump) — cooldown gated ─────────
+    if (this.anchorY === undefined) {
+      this.anchorY = handY;
       return;
     }
 
     if (now - this.lastActionTime < this.actionCooldownMs) {
-      // During cooldown, force the anchor to follow the hand immediately.
-      // This completely absorbs the "return to center" stroke!
-      this.anchorPos = { x: handX, y: handY };
+      this.anchorY = handY;
+      this._handYHistory = []; // clear history during cooldown so stale frames don't bleed in
       return;
     }
 
-    const dy = handY - this.anchorPos.y;
-
-    // Must move 18% of the screen relative to the anchor to trigger jump/slide
-    const SWIPE_THRESHOLD_Y = 0.18;
-
-    let yGestureTriggered = false;
-
-    if (dy < -SWIPE_THRESHOLD_Y) {
-      if (this.onJump) this.onJump();
-      yGestureTriggered = true;
-    } 
-    else if (dy > SWIPE_THRESHOLD_Y) {
-      if (this.onSlide) this.onSlide();
-      yGestureTriggered = true;
-    } 
-
-    if (yGestureTriggered) {
-      // Snap anchor to current position and start cooldown
-      this.anchorPos = { x: handX, y: handY };
-      this.lastActionTime = now;
-    } else {
-      // Slow drift for Y anchor
-      this.anchorPos.y += (handY - this.anchorPos.y) * 0.08;
+    // Push current position into rolling history
+    this._handYHistory.push({ y: handY, t: now });
+    if (this._handYHistory.length > this._handYHistorySize) {
+      this._handYHistory.shift();
     }
 
-    // Absolutely NO glitching on X Axis: The hand's position IS the character's lane!
-    if (this.onSetLane) {
-      if (handX < 0.35) {
-        this.onSetLane(0); // Left Third of screen -> Left Lane
-      } else if (handX > 0.65) {
-        this.onSetLane(2); // Right Third of screen -> Right Lane
-      } else {
-        this.onSetLane(1); // Center of screen -> Center Lane
+    const dy = handY - this.anchorY;
+    const SWIPE_THRESHOLD_Y = 0.13; // Lowered: 13% of screen height is enough
+
+    // Compute velocity over the full history window (oldest → newest).
+    // This survives One-Euro filter smoothing because we measure across
+    // ~5 frames (~165ms) where the net downward travel is still clear.
+    let windowVelocity = 0;
+    if (this._handYHistory.length >= 2) {
+      const oldest = this._handYHistory[0];
+      const newest = this._handYHistory[this._handYHistory.length - 1];
+      const elapsed = newest.t - oldest.t;
+      if (elapsed > 0) {
+        windowVelocity = (newest.y - oldest.y) / elapsed;
       }
     }
+
+    const SWIPE_VELOCITY_THRESHOLD = 0.0008; // Lowered: easier to trigger on moderate swipes
+
+    if (windowVelocity > SWIPE_VELOCITY_THRESHOLD || dy > SWIPE_THRESHOLD_Y) {
+      if (this.onSlide) this.onSlide();
+      this.anchorY = handY;
+      this._handYHistory = [];
+      this.lastActionTime = now;
+      return;
+    }
+    if (dy < -SWIPE_THRESHOLD_Y) {
+      // Swallow upward swipe so the return stroke doesn't misfire.
+      this.anchorY = handY;
+      this._handYHistory = [];
+      this.lastActionTime = now;
+      return;
+    }
+
+    // ── Shape Recognition via fingerpose (ML gesture estimator) ───────────
+    // Only run when hand is roughly still vertically — avoids false
+    // positives from motion blur mid-swipe.
+    const isHandStill = Math.abs(dy) < 0.08;
+
+    if (isHandStill) {
+      const lms = hand.smoothedLandmarks || hand.landmarks;
+
+      // fingerpose expects landmarks as [[x,y,z], ...] in pixel-like coords.
+      // MediaPipe gives normalised [0-1] values; we scale to 640x480 to
+      // match the format fingerpose was trained on.
+      const scaled = lms.map(lm => [lm.x * 640, lm.y * 480, (lm.z || 0) * 640]);
+
+      // minConfidence = 7.5 out of 10 — strict enough to avoid false fists
+      // but forgiving enough that a solid grip always fires.
+      const result = gestureEstimator.estimate(scaled, 7.5);
+      const topGesture = result.gestures.length > 0
+        ? result.gestures.reduce((a, b) => a.score > b.score ? a : b)
+        : null;
+
+      const currentShape = topGesture && topGesture.name === 'FIST' ? 'FIST' : 'NEUTRAL';
+
+      if (currentShape === 'FIST') {
+        this._fistFrames = (this._fistFrames || 0) + 1;
+        // Require 3 consecutive FIST frames to reject motion-blur false-positives
+        if (this._fistFrames >= 3 && this.lastHandShape !== 'FIST') {
+          if (this.onJump) this.onJump();
+          this.lastActionTime = now;
+          this.anchorY = handY;
+          this.lastHandShape = 'FIST';
+        }
+      } else {
+        this._fistFrames = 0;
+        this.lastHandShape = 'NEUTRAL';
+      }
+    } else {
+      this._fistFrames = 0;
+    }
+
+    // Slowly drift the Y anchor so resting doesn't accumulate a stale delta
+    this.anchorY += (handY - this.anchorY) * 0.06;
   }
 
   drawSkeleton(ctx, landmarks, width, height) {
@@ -402,6 +491,9 @@ export class HandTracker {
     if (this.framesSinceLastLock > this.lockTimeoutFrames) {
       this.lockedTarget = null;
       this.smoother.reset();
+      this._laneZone = undefined;
+      this.anchorY = undefined;
+      this.lastHandShape = undefined;
     }
     if (this.onPrimaryHandUpdate) {
       this.onPrimaryHandUpdate(null);

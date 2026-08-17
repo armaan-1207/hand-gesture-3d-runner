@@ -22,6 +22,86 @@ export class ObstacleManager {
     this._obsBox = new THREE.Box3();
     
     this.time = 0;
+
+    // Shuffle Bag: guarantees no more than 1 repeat in a row.
+    // Works like a Tetris bag — all 3 types are drawn before reshuffling.
+    this._bag = [];
+    this._bagIndex = 3; // start exhausted so first call refills
+
+    // ── Object Pools ──────────────────────────────────────────────────
+    // Instead of `new THREE.Group()`/`new THREE.Mesh()` on every chunk
+    // recycle, obstacles/coins are pulled from and returned to these pools.
+    // Geometries/materials were already shared; this eliminates the
+    // remaining per-recycle allocation (and the GC-driven stutter it caused).
+    this._hurdlePool = [];
+    this._overhangPool = [];
+    this._blockadePool = [];
+    this._coinPool = [];
+    this._prewarmPools();
+  }
+
+  /**
+   * Pre-allocate a steady-state supply of each archetype so even the very
+   * first chunk recycle (a few seconds into the run) doesn't have to build
+   * anything from scratch. Sized generously off VISIBLE_CHUNKS; if a run
+   * of bad luck exceeds this, _acquire() just builds one more on demand
+   * (a rare one-off allocation, not a per-frame pattern) — nothing breaks.
+   */
+  _prewarmPools() {
+    const chunks = CONFIG.VISIBLE_CHUNKS || 14;
+    const perTypeCount = chunks * 3;   // ~3 of each obstacle type per chunk, steady state
+    const coinCount = chunks * 12;     // up to 16/chunk in bursts, 12 covers typical
+
+    for (let i = 0; i < perTypeCount; i++) this._hurdlePool.push(this._buildHurdleGroup());
+    for (let i = 0; i < perTypeCount; i++) this._overhangPool.push(this._buildOverhangGroup());
+    for (let i = 0; i < perTypeCount; i++) this._blockadePool.push(this._buildBlockadeGroup());
+    for (let i = 0; i < coinCount; i++) this._coinPool.push(this._buildCoin());
+  }
+
+  /** Pop a ready-to-use instance from a pool, or build one if it's empty. */
+  _acquire(pool, builder) {
+    return pool.length > 0 ? pool.pop() : builder();
+  }
+
+  _removeFromArray(arr, obj) {
+    const idx = arr.indexOf(obj);
+    if (idx !== -1) arr.splice(idx, 1);
+  }
+
+  /**
+   * Returns a direct child of a chunkGroup (an obstacle group or a coin
+   * mesh) back to its pool for reuse, detaching it from the scene graph
+   * and its tracking array (`this.obstacles` / `this.coins`) first.
+   * This is the single purge/recycle path — called both when a chunk
+   * recycles (TrackManager) and immediately on coin collection.
+   */
+  releaseNode(node) {
+    if (!node || !node.userData) return;
+    const { type, subType } = node.userData;
+
+    if (node.parent) node.parent.remove(node);
+
+    if (type === 'COIN') {
+      this._removeFromArray(this.coins, node);
+      gsap.killTweensOf(node.scale);
+      gsap.killTweensOf(node.position);
+      this._coinPool.push(node);
+      return;
+    }
+
+    if (type === 'OBSTACLE') {
+      if (subType === 'OVERHANG') {
+        const header = node.userData.headerRef;
+        if (header) this._removeFromArray(this.obstacles, header);
+        this._overhangPool.push(node);
+      } else if (subType === 'HURDLE') {
+        this._removeFromArray(this.obstacles, node);
+        this._hurdlePool.push(node);
+      } else if (subType === 'BLOCKADE') {
+        this._removeFromArray(this.obstacles, node);
+        this._blockadePool.push(node);
+      }
+    }
   }
 
   initSharedResources() {
@@ -71,6 +151,11 @@ export class ObstacleManager {
       transparent: true, opacity: 0.45, depthWrite: false,
     });
 
+    // Blockade wireframe shield overlay (was previously a new material per spawn call)
+    this.blockadeWireMat = new THREE.MeshBasicMaterial({
+      color: 0x00ff66, wireframe: true, transparent: true, opacity: 0.15
+    });
+
     // ── Coin: Glowing digital data cube ────────────────────────
     this.coinGeo = new THREE.BoxGeometry(0.4, 0.4, 0.4);
     this.coinMat = new THREE.MeshStandardMaterial({
@@ -94,6 +179,24 @@ export class ObstacleManager {
   }
 
   /**
+   * Shuffle Bag draw — refills and reshuffles when all 3 types are used.
+   * Guarantees you never see the same obstacle type more than once in sequence.
+   */
+  _nextObstacleType() {
+    if (this._bagIndex >= this._bag.length) {
+      // Refill with one of each type [0=Hurdle, 1=Overhang, 2=Blockade]
+      this._bag = [0, 1, 2];
+      // Fisher-Yates shuffle
+      for (let i = this._bag.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [this._bag[i], this._bag[j]] = [this._bag[j], this._bag[i]];
+      }
+      this._bagIndex = 0;
+    }
+    return this._bag[this._bagIndex++];
+  }
+
+  /**
    * Spawns obstacles and coins onto a track chunk.
    * 4 spawn slots per chunk, each guaranteed to have an obstacle OR a coin run.
    */
@@ -110,36 +213,66 @@ export class ObstacleManager {
        chunkLength * 0.38,
     ];
 
-    zPositions.forEach((relZ) => {
-      const obstacleType = Math.floor(Math.random() * 3);
-      const blockedLanes = new Set();
+    // Build a 4-slot sequence for this chunk: pick all 3 types + 1 random,
+    // shuffle them, then swap any adjacent duplicates. This guarantees variety
+    // within EVERY chunk and across chunk boundaries via the bag.
+    const extra = this._nextObstacleType();
+    let slotTypes = [this._nextObstacleType(), this._nextObstacleType(), this._nextObstacleType(), extra];
 
-      // All obstacle types now spawn in exactly 2 lanes, leaving 1 safe lane.
-      // This gives the player the choice to either Jump/Slide OR dodge into the safe lane!
-      const openLane = Math.floor(Math.random() * 3);
-      for (let l = 0; l < 3; l++) {
-        if (l !== openLane) {
-          blockedLanes.add(l);
-          if (obstacleType === 0) {
-            this.spawnHurdle(chunkGroup, lanes[l], relZ);
-          } else if (obstacleType === 1) {
-            this.spawnOverhang(chunkGroup, lanes[l], relZ);
-          } else {
-            this.spawnBlockade(chunkGroup, lanes[l], relZ);
+    // Fisher-Yates shuffle the 4 slots
+    for (let i = slotTypes.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [slotTypes[i], slotTypes[j]] = [slotTypes[j], slotTypes[i]];
+    }
+
+    // Fix any adjacent duplicates by swapping with the next different slot
+    for (let i = 0; i < slotTypes.length - 1; i++) {
+      if (slotTypes[i] === slotTypes[i + 1]) {
+        // Find a later slot that differs and swap
+        for (let j = i + 2; j < slotTypes.length; j++) {
+          if (slotTypes[j] !== slotTypes[i]) {
+            [slotTypes[i + 1], slotTypes[j]] = [slotTypes[j], slotTypes[i + 1]];
+            break;
           }
         }
       }
+    }
 
-      const safeLanes = [0, 1, 2].filter((l) => !blockedLanes.has(l));
-      if (safeLanes.length > 0) {
-        const coinLane = safeLanes[Math.floor(Math.random() * safeLanes.length)];
-        this.spawnCoinSequence(chunkGroup, lanes[coinLane], relZ);
+    zPositions.forEach((relZ, slotIndex) => {
+      const primaryType = slotTypes[slotIndex];
+      
+      // Always guarantee exactly 1 safe lane
+      const safeLane = Math.floor(Math.random() * 3);
+      const otherLanes = [0, 1, 2].filter(l => l !== safeLane);
+      
+      const spawnObs = (type, lane) => {
+        if (type === 0) this.spawnHurdle(chunkGroup, lanes[lane], relZ);
+        else if (type === 1) this.spawnOverhang(chunkGroup, lanes[lane], relZ);
+        else this.spawnBlockade(chunkGroup, lanes[lane], relZ);
+      };
+
+      // Always spawn the primary obstacle
+      spawnObs(primaryType, otherLanes[0]);
+
+      // 60% chance to spawn a second obstacle in the other lane to create complex dodging!
+      if (Math.random() < 0.60) {
+        let secondaryType = primaryType;
+        // 50% chance it's a DIFFERENT type of obstacle (e.g. Jump next to a Duck)
+        if (Math.random() < 0.5) {
+          secondaryType = (primaryType + 1 + Math.floor(Math.random() * 2)) % 3;
+        }
+        spawnObs(secondaryType, otherLanes[1]);
+      }
+
+      // 60% chance to spawn a sweet line of coins in the guaranteed safe lane
+      if (Math.random() < 0.60) {
+        this.spawnCoinSequence(chunkGroup, lanes[safeLane], relZ);
       }
     });
   }
 
   // ── HURDLE: Laser Fence — player must JUMP ─────────────────────
-  spawnHurdle(chunkGroup, xPos, relZ) {
+  _buildHurdleGroup() {
     const group = new THREE.Group();
 
     // Sturdier vertical side posts (Monolith style)
@@ -163,14 +296,19 @@ export class ObstacleManager {
       group.add(beam, halo);
     }
 
-    group.position.set(xPos, 0, relZ);
     group.userData = { type: 'OBSTACLE', subType: 'HURDLE' };
-    chunkGroup.add(group);
+    return group;
+  }
+
+  spawnHurdle(chunkGroup, xPos, relZ) {
+    const group = this._acquire(this._hurdlePool, () => this._buildHurdleGroup());
+    group.position.set(xPos, 0, relZ);
+    chunkGroup.add(group); // Object3D.add() auto-detaches from the pool (no parent)
     this.obstacles.push(group);
   }
 
   // ── OVERHANG: dark gate — player must SLIDE ───────────────────────────
-  spawnOverhang(chunkGroup, xPos, relZ) {
+  _buildOverhangGroup() {
     const group = new THREE.Group();
 
     // Tall side pillars
@@ -197,22 +335,33 @@ export class ObstacleManager {
     capR.position.set( 1.35, 3.52, 0);
 
     group.add(pillarL, pillarR, header, stripe, capL, capR);
+
+    // The GROUP is what gets added/removed from a chunk (and pooled), but
+    // collision math needs the HEADER's world position specifically — so
+    // the group carries its own userData for pool-release purposes, plus
+    // a back-reference to the header so releaseNode() can purge it from
+    // `this.obstacles` too.
+    group.userData = { type: 'OBSTACLE', subType: 'OVERHANG', headerRef: header };
+    return group;
+  }
+
+  spawnOverhang(chunkGroup, xPos, relZ) {
+    const group = this._acquire(this._overhangPool, () => this._buildOverhangGroup());
     group.position.set(xPos, 0, relZ);
     chunkGroup.add(group);
-    this.obstacles.push(header); // header triggers OVERHANG collision
+    this.obstacles.push(group.userData.headerRef); // header triggers OVERHANG collision
   }
 
   // ── BLOCKADE: holographic wall — player must change LANE ─────────────
-  spawnBlockade(chunkGroup, xPos, relZ) {
+  _buildBlockadeGroup() {
     const group = new THREE.Group();
 
     // Translucent holographic panel (Energy Shield)
     const wall    = new THREE.Mesh(this.blockadeWallGeo, this.holoWallMat);
     wall.position.y = 1.6;
 
-    // Shield Wireframe overlay
-    const wireMat = new THREE.MeshBasicMaterial({ color: 0x00ff66, wireframe: true, transparent: true, opacity: 0.15 });
-    const wireWall = new THREE.Mesh(this.blockadeWallGeo, wireMat);
+    // Shield Wireframe overlay (shared material — was previously re-created per spawn)
+    const wireWall = new THREE.Mesh(this.blockadeWallGeo, this.blockadeWireMat);
     wireWall.position.copy(wall.position);
     wireWall.scale.set(1.01, 1.01, 1.01);
 
@@ -233,21 +382,34 @@ export class ObstacleManager {
     scan2.position.set(0, 0.8, 0);
 
     group.add(wall, wireWall, frameTop, frameBot, frameL, frameR, scan1, scan2);
-    group.position.set(xPos, 0, relZ);
     group.userData = { type: 'OBSTACLE', subType: 'BLOCKADE' };
+    return group;
+  }
+
+  spawnBlockade(chunkGroup, xPos, relZ) {
+    const group = this._acquire(this._blockadePool, () => this._buildBlockadeGroup());
+    group.position.set(xPos, 0, relZ);
     chunkGroup.add(group);
     this.obstacles.push(group);
   }
 
   // ── COINS: glowing digital cube ─────────────
+  _buildCoin() {
+    const coin = new THREE.Mesh(this.coinGeo, this.coinMat);
+    coin.userData = { type: 'COIN', collected: false };
+    return coin;
+  }
+
   spawnCoinSequence(chunkGroup, xPos, startRelZ) {
-    const coinCount = 3 + Math.floor(Math.random() * 3);
-    const spacing   = 2.5;
+    const coinCount = 3 + Math.floor(Math.random() * 2); // 3 or 4 coins in a line
+    const spacing   = 3.0; // Slightly more spaced out
 
     for (let i = 0; i < coinCount; i++) {
-      const coin = new THREE.Mesh(this.coinGeo, this.coinMat);
+      const coin = this._acquire(this._coinPool, () => this._buildCoin());
       coin.position.set(xPos, 1.15, startRelZ - i * spacing);
-      coin.userData = { type: 'COIN', collected: false, idx: i };
+      coin.rotation.set(0, 0, 0);
+      coin.scale.set(1, 1, 1);
+      coin.userData.collected = false;
       chunkGroup.add(coin);
       this.coins.push(coin);
     }
@@ -352,7 +514,7 @@ export class ObstacleManager {
           duration: 0.2,
           ease: 'power2.out',
           onComplete: () => {
-            if (coin.parent) coin.parent.remove(coin);
+            this.releaseNode(coin);
           }
         });
         gsap.to(coin.position, {
@@ -366,10 +528,20 @@ export class ObstacleManager {
   }
 
   reset() {
-    // Kill any in-flight collect animations before clearing — prevents ghost
-    // scale/position tweens firing on recycled coin slots after restart.
-    this.coins.forEach((c) => { if (c) gsap.killTweensOf(c); });
+    // Kill any in-flight collect animations defensively. The actual return
+    // of live obstacles/coins to their pools happens via releaseNode(),
+    // triggered per-chunk when TrackManager.reset() re-places every pooled
+    // chunk right after this runs — this is just a safety net.
+    this.coins.forEach((c) => {
+      if (c) {
+        gsap.killTweensOf(c.scale);
+        gsap.killTweensOf(c.position);
+      }
+    });
     this.obstacles.length = 0;
     this.coins.length = 0;
+    // Reset shuffle bag so obstacle sequence starts fresh every run
+    this._bag = [];
+    this._bagIndex = 3;
   }
 }
