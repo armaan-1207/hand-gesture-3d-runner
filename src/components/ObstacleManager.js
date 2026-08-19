@@ -417,27 +417,26 @@ export class ObstacleManager {
 
   update(dt) {
     this.time += dt;
+    this._frameCount = ((this._frameCount || 0) + 1);
 
-    // Pulse / Glitch effect on the obstacle materials
-    if (this.holoWallMat && this.glowHaloMat) {
-      // Base pulse
-      const pulse = Math.sin(this.time * 6) * 0.1;
-      
-      // Random glitch
-      const glitch = Math.random() > 0.95 ? (Math.random() * -0.3) : 0;
-      
+    // Pulse / Glitch — throttled to every 3rd frame (20fps update rate).
+    // Writing to .opacity marks the material dirty and forces a GPU uniform
+    // upload. Running it at 20fps is imperceptible but saves ~40 material
+    // uploads per second.
+    if (this._frameCount % 3 === 0 && this.holoWallMat && this.glowHaloMat) {
+      const pulse   = Math.sin(this.time * 6) * 0.1;
+      const glitch  = Math.random() > 0.97 ? (Math.random() * -0.3) : 0;
       this.holoWallMat.opacity = Math.max(0.2, Math.min(0.8, 0.45 + pulse + glitch));
       this.glowHaloMat.opacity = Math.max(0, Math.min(1, 0.25 + pulse * 0.5 + glitch));
     }
 
-    const t = Date.now() * 0.003;
+    // Coin float — use accumulated this.time instead of Date.now() syscall
     for (let i = 0; i < this.coins.length; i++) {
       const coin = this.coins[i];
       if (coin && !coin.userData.collected) {
         coin.rotation.y += 2.2 * dt;
         coin.rotation.x += 1.5 * dt;
-        // Gentle float
-        coin.position.y = 1.15 + Math.sin(t + i * 1.2) * 0.14;
+        coin.position.y = 1.15 + Math.sin(this.time * 3 + i * 1.2) * 0.14;
       }
     }
   }
@@ -470,20 +469,24 @@ export class ObstacleManager {
       obstacle.getWorldPosition(this._obstacleWorldPos);
 
       // Proximity pre-check: skip if far away in Z.
+      // Window must be > (maxSpeed * maxDelta) + maxObstacleHalfDepthZ + playerHalfDepthZ
+      // = (65 * 0.05) + 0.55 + 0.25 = 4.05 — using 7.0 for generous safety margin.
       const deltaZ = Math.abs(this._obstacleWorldPos.z - this._playerWorldPos.z);
-      if (deltaZ > 4.0) continue;
+      if (deltaZ > 7.0) continue;
 
       const subType = obstacle.userData ? obstacle.userData.subType : 'BLOCKADE';
 
       if (subType === 'HURDLE') {
-        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,    this._obstacleWorldPos.z - 0.3);
-        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 0.85, this._obstacleWorldPos.z + 0.3);
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,    this._obstacleWorldPos.z - 0.55);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 0.85, this._obstacleWorldPos.z + 0.55);
       } else if (subType === 'OVERHANG') {
-        this._obsBox.min.set(this._obstacleWorldPos.x - 1.2, 1.6, this._obstacleWorldPos.z - 0.4);
-        this._obsBox.max.set(this._obstacleWorldPos.x + 1.2, 3.2, this._obstacleWorldPos.z + 0.4);
+        // Upper bound extended to 8.0 so jumping (which raises player to ~3.4) still results in a crash.
+        // You MUST slide (which drops player to 0.8) to pass under the 1.6 lower bound.
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.2, 1.6, this._obstacleWorldPos.z - 0.55);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.2, 8.0, this._obstacleWorldPos.z + 0.55);
       } else {
-        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,   this._obstacleWorldPos.z - 0.5);
-        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 3.2, this._obstacleWorldPos.z + 0.5);
+        this._obsBox.min.set(this._obstacleWorldPos.x - 1.1, 0,   this._obstacleWorldPos.z - 0.65);
+        this._obsBox.max.set(this._obstacleWorldPos.x + 1.1, 3.2, this._obstacleWorldPos.z + 0.65);
       }
 
       if (this._playerBox.intersectsBox(this._obsBox)) {

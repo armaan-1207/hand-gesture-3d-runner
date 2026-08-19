@@ -22,9 +22,9 @@ export const CONFIG = {
   HAND_MAX_SPEED: 38,
   HAND_ACCELERATION: 0.12,
   JUMP_HEIGHT: 3.4,
-  JUMP_DURATION: 0.55,
-  SLIDE_DURATION: 0.65,
-  TRACK_CHUNK_LENGTH: 60,
+  JUMP_DURATION: 0.42,
+  SLIDE_DURATION: 0.45,
+  TRACK_CHUNK_LENGTH: 80,
   VISIBLE_CHUNKS: 14 // 14 × 60m = 840m lookahead — smooth with pool recycling
 };
 
@@ -442,25 +442,15 @@ class CyberRunnerGame {
   setLane(targetLane) {
     if (targetLane === this.currentLane) return;
 
-    // Determine direction for character leaning
-    const direction = targetLane > this.currentLane ? 1 : -1;
     this.currentLane = targetLane;
     const targetX = CONFIG.LANES[this.currentLane];
 
     if (this.laneTween) this.laneTween.kill();
 
-    // Tilt character dynamically during move (exaggerated for smoothness)
-    this.playerGroup.rotation.z = direction * -0.25; 
-
-    // Bouncy, spring-like easing instead of a rigid snap
     this.laneTween = gsap.to(this.playerGroup.position, {
       x: targetX,
-      duration: 0.35, 
-      ease: 'back.out(1.2)', 
-      onComplete: () => {
-        // Softly settle the rotation back to 0
-        gsap.to(this.playerGroup.rotation, { z: 0, duration: 0.2, ease: 'sine.inOut' });
-      }
+      duration: 0.1,
+      ease: 'power3.out'
     });
   }
 
@@ -494,12 +484,12 @@ class CyberRunnerGame {
       .to(this.playerGroup.position, {
         y: jumpHeight,
         duration: duration * 0.45,
-        ease: 'power1.out'
+        ease: 'power3.out'
       }, '<')
       .to(this.playerGroup.position, {
         y: 0,
         duration: duration * 0.45,
-        ease: 'power2.in'
+        ease: 'power3.in'
       })
       .to(this.playerGroup.scale, { y: 0.85, x: 1.1, duration: 0.08, ease: 'power1.in' })
       .to(this.playerGroup.scale, { y: 1, x: 1, duration: 0.08, ease: 'power1.out' });
@@ -517,8 +507,6 @@ class CyberRunnerGame {
       });
       return;
     }
-
-    if (this.isSliding) return;
     this.triggerSlideAnimation();
   }
 
@@ -548,6 +536,12 @@ class CyberRunnerGame {
           if (this.currentAction) this.currentAction.fadeOut(0.2);
           this.actions.run.reset().setEffectiveTimeScale(1).setEffectiveWeight(1).fadeIn(0.2).play();
           this.currentAction = this.actions.run;
+        }
+        // Reset gesture anchor so the hand's resting position after a slide
+        // doesn't accumulate a stale delta and misfire another slide immediately.
+        if (this.handTracker) {
+          this.handTracker.anchorY = undefined;
+          this.handTracker._handYHistory = [];
         }
       }
     });
@@ -598,15 +592,10 @@ class CyberRunnerGame {
   }
 
   applySpeedSettings() {
-    if (this.handTracker && this.handTracker.isTracking) {
-      this.speed = CONFIG.HAND_INITIAL_SPEED;
-      this.currentAcceleration = CONFIG.HAND_ACCELERATION;
-      this.maxSpeed = CONFIG.HAND_MAX_SPEED;
-    } else {
-      this.speed = CONFIG.INITIAL_SPEED;
-      this.currentAcceleration = CONFIG.ACCELERATION;
-      this.maxSpeed = CONFIG.MAX_SPEED;
-    }
+    this.speed = CONFIG.INITIAL_SPEED;
+    this.currentAcceleration = CONFIG.ACCELERATION;
+    this.maxSpeed = CONFIG.MAX_SPEED;
+    this.baseSpeed = CONFIG.INITIAL_SPEED; // For UI display
   }
 
   startGame() {
@@ -787,10 +776,12 @@ class CyberRunnerGame {
   /**
    * Main Render & Physics Loop
    */
-  animate() {
-    requestAnimationFrame(() => this.animate());
+  animate(timestamp = 0) {
+    requestAnimationFrame((t) => this.animate(t));
 
-    const delta = Math.min(this.clock.getDelta(), 0.1);
+    // Clamp delta to 50ms max to prevent large position jumps when
+    // the browser tab is hidden and later restored.
+    const delta = Math.min(this.clock.getDelta(), 0.05);
 
     if (this.mixer) {
       // The original animation was perfectly synced to the ground at a speed of 28.
@@ -811,9 +802,6 @@ class CyberRunnerGame {
     // }
 
     if (this.gameState === 'PLAYING') {
-      if (!this.isSliding) {
-        this.playerGroup.rotation.set(0, 0, 0);
-      }
 
       // 1. Forward continuous acceleration
       if (this.speed < (this.maxSpeed || CONFIG.MAX_SPEED)) {
@@ -829,10 +817,7 @@ class CyberRunnerGame {
         this.scoreDisplay.innerHTML = `${this.distance}<small>m</small>`;
       }
       if (this.speedDisplay) {
-        const baseline = (this.handTracker && this.handTracker.isTracking)
-          ? CONFIG.HAND_INITIAL_SPEED
-          : CONFIG.INITIAL_SPEED;
-        const speedMultiplier = (this.speed / baseline).toFixed(1);
+        const speedMultiplier = (this.speed / (this.baseSpeed || CONFIG.INITIAL_SPEED)).toFixed(1);
         this.speedDisplay.innerHTML = `${speedMultiplier}<small>x</small>`;
       }
 
